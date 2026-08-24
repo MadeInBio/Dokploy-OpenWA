@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
 import { sessionApi, type Chat } from '../../services/api';
 import { getMediaSrc, senderKey, type ChatMessageView } from '../../utils/chatMessages';
+import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
 import MessageBody from './MessageBody';
 
 // Stable per-sender colour for group message labels, like WhatsApp gives each participant a colour.
@@ -23,6 +24,10 @@ interface ChatThreadProps {
   loadingMessages: boolean;
   messagesError: boolean;
   messagesContainerRef: RefObject<HTMLDivElement | null>;
+  /** Whether an older page of this chat's history exists. */
+  hasMoreMessages: boolean;
+  loadingOlderMessages: boolean;
+  onLoadOlderMessages: () => void;
   onMediaLoad: () => void;
   onOpenImage: (messageId: string) => void;
   onReply: (message: ChatMessageView) => void;
@@ -41,6 +46,9 @@ function ChatThread({
   loadingMessages,
   messagesError,
   messagesContainerRef,
+  hasMoreMessages,
+  loadingOlderMessages,
+  onLoadOlderMessages,
   onMediaLoad,
   onOpenImage,
   onReply,
@@ -98,9 +106,20 @@ function ChatThread({
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return undefined;
-    const onScroll = () => {
+    const onScroll = (event?: Event) => {
       // 120px gap = a couple of message bubbles before counting as "scrolled up".
       setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+      const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+      if (
+        shouldFetchOlderMessages({
+          isUserScroll: Boolean(event),
+          geometry,
+          hasMore: hasMoreMessages,
+          isFetching: loadingOlderMessages,
+        })
+      ) {
+        onLoadOlderMessages();
+      }
     };
     onScroll(); // sync initial position (e.g. saved restore landed above the bottom)
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -140,6 +159,14 @@ function ChatThread({
         >
           <ChevronDown size={22} />
         </button>
+      )}
+      {/* Older-page spinner. A sibling above the thread rather than a wrapper around it, so it
+          renders over the oldest bubble without the list moving. */}
+      {loadingOlderMessages && !loadingMessages && (
+        <div className="messages-loading-older">
+          <Loader2 className="animate-spin" size={18} />
+          <span>{t('chats.loadingOlderMessages')}</span>
+        </div>
       )}
       {loadingMessages ? (
         <div className="messages-loading">

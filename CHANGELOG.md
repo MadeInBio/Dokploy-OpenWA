@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine, for large accounts whose reads fail with `Runtime.callFunctionOn timed out`. Unset keeps
   Puppeteer's own budget, so nothing changes for a deployment that does not set it. The gateway
   refuses to boot on `0` or on a value above 2147483647; see docs/12 for when to reach for it.
+- The dashboard chat room loads older history as you scroll up, instead of stopping at the newest
+  100 messages. Pages are requested by the number of DB rows already fetched — not by the length of
+  the rendered thread, which also carries engine-history items — so no row is skipped between
+  pages, and the reading position is held when a page is prepended rather than jumping.
 
 ### Changed
 

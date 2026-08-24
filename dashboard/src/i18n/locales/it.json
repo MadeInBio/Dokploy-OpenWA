@@ -87,6 +87,7 @@
     "unreadBadge": "{{count}} messaggio non letto",
     "unreadBadge_other": "{{count}} messaggi non letti",
     "loadingMessages": "Caricamento messaggi...",
+    "loadingOlderMessages": "Caricamento messaggi precedenti...",
     "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
     "downloadDocument": "Scarica documento",
     "actions": {

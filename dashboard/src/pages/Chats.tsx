@@ -34,7 +34,12 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
 import { PageHeader } from '../components/PageHeader';
 import { GlobalSearch } from '../components/GlobalSearch';
-import { useChatMessages, useChatMessagesActions, messagesQueryKey } from '../hooks/useChatMessages';
+import {
+  useChatMessages,
+  useChatMessagesActions,
+  messagesQueryKey,
+  updateCachedMessages,
+} from '../hooks/useChatMessages';
 import { useChannelMessages } from '../hooks/useChannelMessages';
 import { useContactStatuses } from '../hooks/useContactStatuses';
 import { useChatScrollPosition } from '../hooks/useChatScrollPosition';
@@ -173,6 +178,9 @@ export function Chats() {
     data: messages = [],
     isLoading: loadingMessages,
     isError: messagesError,
+    hasNextPage: hasMoreMessages,
+    isFetchingNextPage: loadingOlderMessages,
+    fetchNextPage,
   } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
   const { appendMessage, updateMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
@@ -224,7 +232,27 @@ export function Chats() {
     containerRef: messagesContainerRef,
     onMessageAppended,
     onMediaLoad,
+    onOlderMessagesPrepended,
   } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+
+  // Capture the scroll geometry before the older page lands, and restore it once the new bubbles are
+  // in the DOM — otherwise the thread jumps backwards by the height of whatever was just prepended.
+  // A layout effect, not a callback on the fetch promise: the promise settles before React has
+  // committed the new rows, so restoring there would measure the old height.
+  const restoreOlderScrollRef = useRef<(() => void) | null>(null);
+  const handleLoadOlderMessages = useCallback(() => {
+    restoreOlderScrollRef.current = onOlderMessagesPrepended();
+    void fetchNextPage();
+  }, [fetchNextPage, onOlderMessagesPrepended]);
+
+  // Also keyed on the loading flag so a page that adds nothing still clears the pending restore
+  // instead of leaving it to fire on an unrelated later render.
+  useLayoutEffect(() => {
+    const restore = restoreOlderScrollRef.current;
+    if (!restore || loadingOlderMessages) return;
+    restoreOlderScrollRef.current = null;
+    restore();
+  }, [messages.length, loadingOlderMessages]);
 
   // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
   // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
@@ -607,7 +635,7 @@ export function Chats() {
 
       // Deep-merge metadata.reactions so existing media / quotedMessage on metadata survive.
       const key = messagesQueryKey(selectedSessionId, activeChat.id);
-      queryClient.setQueryData<ChatMessageView[]>(key, (old = []) =>
+      updateCachedMessages(queryClient, key, old =>
         old.map(m => {
           if (m.id === msg.id || m.waMessageId === msg.id) {
             const metadata = m.metadata || {};
@@ -924,6 +952,9 @@ export function Chats() {
                   loadingMessages={loadingMessages}
                   messagesError={messagesError}
                   messagesContainerRef={messagesContainerRef}
+                  hasMoreMessages={Boolean(hasMoreMessages)}
+                  loadingOlderMessages={loadingOlderMessages}
+                  onLoadOlderMessages={handleLoadOlderMessages}
                   onMediaLoad={onMediaLoad}
                   onOpenImage={messageId => {
                     const idx = imageMedia.findIndex(x => x.id === messageId);

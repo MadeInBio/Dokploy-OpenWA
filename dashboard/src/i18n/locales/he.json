@@ -89,6 +89,7 @@
     "unreadBadge_two": "שתי הודעות שלא נקראו",
     "unreadBadge_many": "{{count}} הודעות שלא נקראו",
     "loadingMessages": "טוען הודעות...",
+    "loadingOlderMessages": "טוען הודעות ישנות יותר...",
     "noMessagesInChat": "אין הודעות עדיין. שלח את ההודעה הראשונה כדי להתחיל!",
     "downloadDocument": "הורדת מסמך",
     "actions": {

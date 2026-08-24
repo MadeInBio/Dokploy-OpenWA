@@ -76,6 +76,8 @@ export function useChatScrollPosition(
   containerRef: RefObject<HTMLDivElement | null>;
   onMessageAppended: (direction: ScrollDirection) => void;
   onMediaLoad: () => void;
+  /** Call before prepending older messages; call the result after, to hold the reading position. */
+  onOlderMessagesPrepended: () => () => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollMap = useRef<Map<string, number>>(new Map());
@@ -193,5 +195,24 @@ export function useChatScrollPosition(
     });
   }, [pinToBottom, writeScrollTop]);
 
-  return { containerRef, onMessageAppended, onMediaLoad };
+  // Older messages are prepended ABOVE the viewport, so the content the user is reading is pushed
+  // down by however much taller the thread just got. Left alone the thread appears to jump backwards
+  // at the exact moment the user asked for more. Call this immediately BEFORE the prepend to capture
+  // the geometry, then call the returned function right AFTER it to add the delta back.
+  //
+  // Deliberately not the pin/restore machinery above: those write an ABSOLUTE scrollTop, which is
+  // wrong here — the target is only known relative to how much the prepend grew scrollHeight.
+  const onOlderMessagesPrepended = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return () => undefined;
+    const before = el.scrollHeight;
+    const top = el.scrollTop;
+    return () => {
+      const cur = containerRef.current;
+      if (!cur) return;
+      writeScrollTop(cur, top + (cur.scrollHeight - before));
+    };
+  }, [writeScrollTop]);
+
+  return { containerRef, onMessageAppended, onMediaLoad, onOlderMessagesPrepended };
 }
