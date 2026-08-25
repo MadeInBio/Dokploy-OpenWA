@@ -8,8 +8,11 @@ import { mergeOrAppend, type ChatMessageView } from './chatMessages.ts';
 export interface MessagePage {
   db: ChatMessageView[];
   history: ChatMessageView[];
-  /** Total DB rows for this chat (getManyAndCount) — says whether an older page exists. */
-  total: number;
+  /**
+   * Rows this page's fetch RETURNED, recorded before any live arrival is merged in. `db.length`
+   * drifts upward as messages land in page 0, which is why termination cannot be read from it.
+   */
+  fetched: number;
 }
 
 /** DB rows fetched across every page so far — the offset the next page asks for. */
@@ -18,15 +21,17 @@ export function dbRowsFetched(pages: MessagePage[]): number {
 }
 
 /**
- * Offset of the next older page, or undefined once the chat's rows are covered.
+ * Offset of the next older page, or undefined once the oldest page came back short.
  *
- * Counting DB rows, not merged/rendered ones: the merged list carries engine-history items too, so
- * paging by its length would step the cursor past rows that were never read.
+ * The offset counts DB rows including live arrivals — each server insert shifts the window by one,
+ * and rendered length would count engine-history items the DB never returned. Termination cannot
+ * use that same growing count against the chat's frozen row total, which meets it a few live
+ * messages early and strands the oldest rows.
  */
-export function nextMessagePageParam(pages: MessagePage[]): number | undefined {
-  const fetched = dbRowsFetched(pages);
-  const total = pages[pages.length - 1]?.total ?? 0;
-  return fetched < total ? fetched : undefined;
+export function nextMessagePageParam(pages: MessagePage[], pageSize: number): number | undefined {
+  const oldest = pages[pages.length - 1];
+  if (oldest === undefined || oldest.fetched < pageSize) return undefined;
+  return dbRowsFetched(pages);
 }
 
 const messageKey = (m: ChatMessageView): string => m.waMessageId ?? m.id;

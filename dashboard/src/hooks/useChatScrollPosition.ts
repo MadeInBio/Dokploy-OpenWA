@@ -72,12 +72,13 @@ export function isNearBottom(scrollTop: number, scrollHeight: number, clientHeig
 export function useChatScrollPosition(
   activeChatId: string | null,
   isLoaded: boolean,
+  isFetchingOlderMessages: boolean,
 ): {
   containerRef: RefObject<HTMLDivElement | null>;
   onMessageAppended: (direction: ScrollDirection) => void;
   onMediaLoad: () => void;
-  /** Call before prepending older messages; call the result after, to hold the reading position. */
-  onOlderMessagesPrepended: () => () => void;
+  /** Call when an older page is requested; the reading position is held once it lands. */
+  onOlderMessagesRequested: () => void;
 } {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const scrollMap = useRef<Map<string, number>>(new Map());
@@ -90,6 +91,10 @@ export function useChatScrollPosition(
   // Marks our own writes so the scroll listener can skip them (a genuine user scroll both updates
   // the pin state / position map AND cancels pendingRestore; our writes must do neither).
   const programmaticWriteRef = useRef<boolean>(false);
+  // See the layout effect below.
+  const prevScrollHeightRef = useRef<number>(0);
+  const awaitingOlderPageRef = useRef<boolean>(false);
+  const wasFetchingOlderRef = useRef<boolean>(false);
 
   const writeScrollTop = useCallback((el: HTMLDivElement, top: number) => {
     const before = el.scrollTop;
@@ -138,6 +143,9 @@ export function useChatScrollPosition(
     const el = containerRef.current;
     // A new restore decision supersedes any pending one (it belongs to a different chat/visit).
     pendingRestoreRef.current = null;
+    // Same for a page still in flight: its delta belongs to the thread being left. This effect is
+    // declared before the height tracker, so the flag is gone before the tracker could act on it.
+    if (next !== prevChatIdRef.current) awaitingOlderPageRef.current = false;
 
     const decision = decideRestoreTarget(next, isLoaded, next !== null ? scrollMap.current.get(next) : undefined);
 
@@ -156,6 +164,39 @@ export function useChatScrollPosition(
 
     prevChatIdRef.current = next;
   }, [activeChatId, isLoaded, pinToBottom, writeScrollTop]);
+
+  // Older messages are prepended ABOVE the viewport, so the thread grows upward and what the user
+  // was reading is pushed down by however much taller it just got. Left alone the view jumps
+  // backwards at the exact moment they asked for more.
+  //
+  // The height is read when the page is REQUESTED and the delta applied on the commit where the
+  // in-flight flag falls — not on the first commit whose height changed, because the older-page
+  // spinner is an in-flow child of this same container (ChatThread) and its own ~46px arrives one
+  // commit earlier. Only `scrollHeight` is held; `scrollTop` is read live at apply time, so a
+  // deliberate reposition made during the fetch survives. The pin/restore machinery above is not
+  // reused: it writes an ABSOLUTE target, which is unknowable here.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    const wasFetching = wasFetchingOlderRef.current;
+    wasFetchingOlderRef.current = isFetchingOlderMessages;
+    // The FALLING edge, not merely "not fetching": the request is made in a scroll handler and the
+    // query only reports itself in flight a turn later, so any commit in between — a live message,
+    // a media decode, another query resolving — would otherwise consume the pending correction.
+    if (!el || isFetchingOlderMessages || !wasFetching || !awaitingOlderPageRef.current) return;
+    awaitingOlderPageRef.current = false;
+    // A live message landing mid-fetch is inside this delta too, and it grew the thread at the
+    // BOTTOM where no correction is wanted — one bubble of overshoot in that race, against a whole
+    // page of it if the prepend went uncorrected.
+    const grew = el.scrollHeight - prevScrollHeightRef.current;
+    if (grew > 0) writeScrollTop(el, el.scrollTop + grew);
+  });
+
+  const onOlderMessagesRequested = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    prevScrollHeightRef.current = el.scrollHeight;
+    awaitingOlderPageRef.current = true;
+  }, []);
 
   const onMessageAppended = useCallback(
     (direction: ScrollDirection) => {
@@ -195,24 +236,5 @@ export function useChatScrollPosition(
     });
   }, [pinToBottom, writeScrollTop]);
 
-  // Older messages are prepended ABOVE the viewport, so the content the user is reading is pushed
-  // down by however much taller the thread just got. Left alone the thread appears to jump backwards
-  // at the exact moment the user asked for more. Call this immediately BEFORE the prepend to capture
-  // the geometry, then call the returned function right AFTER it to add the delta back.
-  //
-  // Deliberately not the pin/restore machinery above: those write an ABSOLUTE scrollTop, which is
-  // wrong here — the target is only known relative to how much the prepend grew scrollHeight.
-  const onOlderMessagesPrepended = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return () => undefined;
-    const before = el.scrollHeight;
-    const top = el.scrollTop;
-    return () => {
-      const cur = containerRef.current;
-      if (!cur) return;
-      writeScrollTop(cur, top + (cur.scrollHeight - before));
-    };
-  }, [writeScrollTop]);
-
-  return { containerRef, onMessageAppended, onMediaLoad, onOlderMessagesPrepended };
+  return { containerRef, onMessageAppended, onMediaLoad, onOlderMessagesRequested };
 }

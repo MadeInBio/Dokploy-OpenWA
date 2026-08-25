@@ -17,6 +17,9 @@ import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session, Chat, ChatMessage } from '../services/api';
 import type { installJsdomGlobals as installJsdomGlobalsFn } from '../test-helpers/jsdom.ts';
+// socket.io-client resolves to a double under this runner (see vite-shim-hooks.mjs), which is what
+// lets a test deliver a server frame to the page's realtime handlers.
+import { lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
 
 // ── Fixtures + fetch stub ────────────────────────────────────────────────────
 
@@ -93,6 +96,48 @@ const OMITTED_MEDIA_MESSAGE_2: ChatMessage = {
   createdAt: new Date(1_700_000_002_000).toISOString(),
   metadata: { media: { mimetype: 'image/jpeg', filename: 'photo-2.jpg', omitted: true, sizeBytes: 9_000_000 } },
 };
+
+// Carol's thread is long enough to page: a full first page, then a short older one that ends it.
+// Each row's body carries its index so a test can name the exact bubble a given page brought in.
+const PAGE_SIZE = 100;
+
+const pagedRow = (index: number, extra: Partial<ChatMessage> = {}): ChatMessage => ({
+  id: `paged-${index}`,
+  waMessageId: `wamid.paged.${index}`,
+  chatId: CHAT_2.id,
+  from: CHAT_2.id,
+  to: 'me',
+  body: `paged message ${index}`,
+  type: 'text',
+  direction: 'incoming',
+  status: 'delivered',
+  timestamp: 1_700_001_000 + index,
+  createdAt: new Date((1_700_001_000 + index) * 1000).toISOString(),
+  ...extra,
+});
+
+// Newest first, the order the gateway returns (createdAt DESC): 119 down to 20 on the first page,
+// 19 down to 0 on the second. The second is short, which is what ends the paging. Row 0 is ours and
+// unacked, so the ack test has a delivery tick to watch on a row only the oldest page holds.
+const PAGED_NEWEST = Array.from({ length: PAGE_SIZE }, (_, i) => pagedRow(119 - i));
+const PAGED_OLDEST = Array.from({ length: 20 }, (_, i) =>
+  i === 19 ? pagedRow(0, { direction: 'outgoing', from: 'me', to: CHAT_2.id, status: 'sent' }) : pagedRow(19 - i),
+);
+
+// Hold the older page open so the spinner commit and the landing commit stay distinct.
+let olderPageGate: Promise<void> | null = null;
+
+function holdOlderPage(): () => void {
+  let release!: () => void;
+  olderPageGate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return release;
+}
+
+/** The messages route for one page of Carol's thread, as the api client spells it. */
+const pagedMessagesPath = (offset: number): string =>
+  `/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT_2.id)}&limit=${PAGE_SIZE}&offset=${offset}`;
 
 /** The per-message media route the omitted marker sends the viewer to. */
 const mediaPathFor = (waMessageId: string): string =>
@@ -186,6 +231,14 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse([CONTACT]));
     }
     if (method === 'GET' && path.startsWith(`/api/sessions/${SESSION.id}/messages?`)) {
+      const query = new URLSearchParams(path.slice(path.indexOf('?') + 1));
+      if (query.get('chatId') === CHAT_2.id) {
+        const isFirstPage = Number(query.get('offset')) === 0;
+        const messages = isFirstPage ? PAGED_NEWEST : PAGED_OLDEST;
+        const answer = () => jsonResponse({ messages, total: PAGED_NEWEST.length + PAGED_OLDEST.length });
+        const gate = isFirstPage ? null : olderPageGate;
+        return gate ? gate.then(answer) : Promise.resolve(answer());
+      }
       return Promise.resolve(
         jsonResponse({ messages: [DB_MESSAGE, OMITTED_MEDIA_MESSAGE, OMITTED_MEDIA_MESSAGE_2], total: 3 }),
       );
@@ -236,6 +289,9 @@ before(async () => {
   // RoleProvider initializes from localStorage; 'admin' makes canWrite true so the composer
   // controls render enabled.
   window.localStorage.setItem('openwa_user_role', 'admin');
+  // useWebSocket.connect() bails without this, so no socket would exist to receive a frame. It
+  // dials nothing: the client is the double above.
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
   // The real i18n instance, and then its readiness promise: catalogues are fetched rather than
   // bundled, so importing the module only STARTS the load. Every `getByText` below is English copy
   // out of en.json, which renders as a raw key until it lands. Awaiting is what makes that
@@ -251,10 +307,12 @@ before(async () => {
 
 afterEach(() => {
   rtl.cleanup();
+  resetSocketDouble();
   queryClient?.clear();
   queryClient = undefined;
-  // A gate left held would stall the next test's media fetch forever.
+  // A gate left held would stall the next test's fetch forever.
   mediaGates.clear();
+  olderPageGate = null;
 });
 
 function renderChats(): { container: HTMLElement } {
@@ -525,4 +583,178 @@ test('two media downloads in flight do not clobber each other', async () => {
     true,
     "B's download was still open — A settling must not re-enable it",
   );
+});
+
+// ── Paging, and realtime over a paged cache ──────────────────────────────────
+
+/** Modelled heights, so a commit that changes the thread's contents changes its scrollHeight. */
+const BUBBLE_PX = 30;
+const OLDER_SPINNER_PX = 46;
+
+/**
+ * Give the thread container a scrollable geometry. jsdom lays nothing out, so every offset reads 0
+ * and the page would never see a thread it can scroll.
+ *
+ * `scrollHeight` is a getter over the live DOM rather than a constant: the older-page spinner is an
+ * in-flow child of this container, so it grows the thread on its own commit, one commit BEFORE the
+ * page lands. A constant cannot tell those two commits apart, and the scroll-restore test below
+ * turns entirely on the difference.
+ */
+function makeScrollable(thread: HTMLElement, scrollTop: number): void {
+  Object.defineProperty(thread, 'clientHeight', { value: 600, configurable: true });
+  Object.defineProperty(thread, 'scrollHeight', {
+    configurable: true,
+    get: () =>
+      thread.querySelectorAll('.message-bubble').length * BUBBLE_PX +
+      (thread.querySelector('.messages-loading-older') ? OLDER_SPINNER_PX : 0),
+  });
+  let top = scrollTop;
+  Object.defineProperty(thread, 'scrollTop', {
+    configurable: true,
+    get: () => top,
+    set: (value: number) => {
+      top = value;
+    },
+  });
+}
+
+/** Open Carol's thread and return its scroll container, with the first page rendered. */
+async function openPagedChat(container: HTMLElement): Promise<HTMLElement> {
+  const { screen, fireEvent, within } = rtl;
+  await screen.findByText('Main (15551234567)');
+  fireEvent.click(await screen.findByText('Carol'));
+  const thread = container.querySelector('.room-messages') as HTMLElement;
+  await within(thread).findByText('paged message 119');
+  return thread;
+}
+
+test('scrolling to the top of a long thread pulls exactly one older page, then stops', async () => {
+  const { fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+  assert.equal(within(thread).queryByText('paged message 0'), null);
+  assert.equal(countFetchCalls('GET', pagedMessagesPath(0)), 1);
+
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+
+  // Asked for at the number of DB rows already held, not at the length of the rendered thread —
+  // the engine-history merge would have inflated the latter past rows the DB never returned.
+  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(PAGE_SIZE)), 1));
+  await within(thread).findByText('paged message 0');
+
+  // And it ends: the older page came back short, so a further scroll asks for nothing.
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(PAGE_SIZE)), 1));
+  assert.equal(countFetchCalls('GET', pagedMessagesPath(2 * PAGE_SIZE)), 0);
+});
+
+test('a delivery ack reaches a message held by an older page', async () => {
+  const { fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await within(thread).findByText('paged message 0');
+
+  const statusIcon = (): Element | null =>
+    within(thread).getByText('paged message 0').closest('.message-bubble')?.querySelector('.message-status-icon') ??
+    null;
+  assert.ok(statusIcon()?.classList.contains('sent'), 'expected the row to start unacked');
+
+  // The regression this locks out: the realtime handlers used to read this cache as a flat array.
+  // Against the paged shape the ack threw `list.findIndex is not a function` inside a listener with
+  // no try/catch, so delivery ticks, reactions, revokes and edits stopped working in any open chat
+  // with nothing surfaced to the user. The acked row is on the OLDEST page, so a handler that only
+  // walked page 0 would miss it too.
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  socket.receive('message', {
+    type: 'event',
+    timestamp: new Date(1_700_002_000_000).toISOString(),
+    payload: {
+      event: 'message.ack',
+      sessionId: SESSION.id,
+      data: { id: 'paged-0', messageId: 'wamid.paged.0', status: 'read', ack: 3 },
+    },
+  });
+
+  await waitFor(() => assert.ok(statusIcon()?.classList.contains('read'), 'expected the read tick on the acked row'));
+});
+
+test('the reading position is held across the commit that lands an older page', async () => {
+  const { fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+  await waitFor(() => assert.equal(thread.querySelectorAll('.message-bubble').length, PAGE_SIZE));
+
+  const releaseOlderPage = holdOlderPage();
+  makeScrollable(thread, 0);
+  const before = thread.scrollHeight;
+  fireEvent.scroll(thread);
+
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
+  assert.equal(thread.scrollHeight, before + OLDER_SPINNER_PX);
+
+  releaseOlderPage();
+  await within(thread).findByText('paged message 0');
+  await waitFor(() => assert.equal(thread.querySelector('.messages-loading-older'), null));
+
+  // The thread grew upward by the new bubbles, so the row the user was reading has to move down by
+  // exactly that much. The regression this locks out: measuring the growth on the first commit that
+  // changed scrollHeight caught the older-page SPINNER entering the flow, one commit early, and
+  // spent the correction on its ~46px — leaving the real prepend uncorrected and the view thrown a
+  // full page backwards.
+  assert.equal(thread.scrollHeight - before, PAGED_OLDEST.length * BUBBLE_PX);
+  assert.equal(thread.scrollTop, PAGED_OLDEST.length * BUBBLE_PX);
+});
+
+test('a message arriving while an older page is in flight survives the page landing', async () => {
+  const { fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+
+  const releaseOlderPage = holdOlderPage();
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
+
+  // The regression this locks out: a page in flight carries a snapshot of `data.pages` taken when
+  // it started, so its result overwrites anything written meanwhile — and at staleTime: Infinity
+  // no refetch brings it back. Without the replay the bubble below is gone for good.
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  socket.receive('message', {
+    type: 'event',
+    timestamp: new Date(1_700_002_000_000).toISOString(),
+    payload: {
+      event: 'message.received',
+      sessionId: SESSION.id,
+      data: {
+        id: 'wamid.live.1',
+        chatId: CHAT_2.id,
+        from: CHAT_2.id,
+        to: 'me',
+        body: 'arrived mid-fetch',
+        type: 'text',
+        fromMe: false,
+        timestamp: 1_700_001_500,
+      },
+    },
+  });
+  await within(thread).findByText('arrived mid-fetch');
+
+  releaseOlderPage();
+  await within(thread).findByText('paged message 0');
+
+  // Still there, exactly once, after the page landed on top of it.
+  await waitFor(() => assert.equal(within(thread).getAllByText('arrived mid-fetch').length, 1));
 });

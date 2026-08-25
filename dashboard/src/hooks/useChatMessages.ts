@@ -5,15 +5,16 @@ import {
   type UseInfiniteQueryResult,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import {
   mergeChatMessages,
   mapEngineHistoryMessage,
   updateMessageById,
   removeMessageById,
   type ChatMessageView,
-} from '../utils/chatMessages.ts';
-import { upsertIntoPages, nextMessagePageParam, type MessagePage } from '../utils/messagePages.ts';
-import { sessionApi } from '../services/api.ts';
+} from '../utils/chatMessages';
+import { upsertIntoPages, nextMessagePageParam, type MessagePage } from '../utils/messagePages';
+import { sessionApi } from '../services/api';
 
 export type MessagesQueryKey = readonly ['messages', string, string];
 
@@ -27,18 +28,34 @@ export const MESSAGE_PAGE_SIZE = 100;
 export type MessagesData = InfiniteData<MessagePage>;
 
 /**
+ * The one flat chronological view of a paged cache. A single page is newest-first and partial, so
+ * neither a message's position nor its absence can be read from one.
+ */
+export function flattenMessagePages(data: MessagesData): ChatMessageView[] {
+  return mergeChatMessages(
+    data.pages.flatMap(page => page.db),
+    data.pages.flatMap(page => page.history),
+  );
+}
+
+/**
  * Fetch a chat's messages a page at a time, newest page first, cached at staleTime: Infinity;
  * realtime updates flow through useChatMessagesActions, not refetches.
  *
  * Engine history comes with the first page only — it is a one-shot backfill of a thread the gateway
  * never captured, with no cursor to page through. Fetched without media to keep the cache small; the
  * DB copy wins in mergeChatMessages, so recent media still renders.
+ *
+ * Base64 media payloads are bounded by capMediaPayloads, which now runs inside `select` and so
+ * bounds the RENDERED set rather than the cache: pages accumulate raw, and the newest
+ * MEDIA_PAYLOAD_CACHE_LIMIT payloads are the ones that stay renderable.
  */
 export function useChatMessages(
   sessionId: string,
   chatId: string | null,
 ): UseInfiniteQueryResult<ChatMessageView[], Error> {
-  return useInfiniteQuery<MessagePage, Error, ChatMessageView[], MessagesQueryKey, number>({
+  const queryClient = useQueryClient();
+  const query = useInfiniteQuery<MessagePage, Error, ChatMessageView[], MessagesQueryKey, number>({
     queryKey: messagesQueryKey(sessionId, chatId ?? ''),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
@@ -51,56 +68,116 @@ export function useChatMessages(
       // rejected DB read there is a real failure and must surface rather than resolve to an empty
       // page that would read as "no more messages".
       if (dbRes.status === 'rejected' && (!wantsHistory || historyRes.status === 'rejected')) throw dbRes.reason;
-      const db = dbRes.status === 'fulfilled' ? dbRes.value : { messages: [], total: 0 };
+      const db = dbRes.status === 'fulfilled' ? dbRes.value : { messages: [] };
       const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
-      return { db: db.messages, history, total: db.total };
+      return { db: db.messages, history, fetched: db.messages.length };
     },
-    getNextPageParam: (_lastPage, allPages) => nextMessagePageParam(allPages),
+    getNextPageParam: (_lastPage, allPages) => nextMessagePageParam(allPages, MESSAGE_PAGE_SIZE),
     // Consumers keep seeing one flat chronological list; paging stays inside the cache.
-    select: data =>
-      mergeChatMessages(
-        data.pages.flatMap(page => page.db),
-        data.pages.flatMap(page => page.history),
-      ),
+    select: flattenMessagePages,
     enabled: Boolean(sessionId && chatId),
     staleTime: Infinity,
     gcTime: 5 * 60 * 1000,
   });
+
+  // A page in flight carries a snapshot of `data.pages` taken when it started (TanStack's
+  // infiniteQueryBehavior reads `oldPages` in onFetch), so its result overwrites anything written
+  // meanwhile — and at staleTime: Infinity no refetch brings it back. An optimistic send during
+  // that window would leave the thread for good. Replay those writes on top of the landed page.
+  const { isFetching } = query;
+  // Leaving this chat drops anything still queued for it rather than holding the closures (and any
+  // base64 payload they captured) for the tab's life. Nothing is lost: the writes describe
+  // server-side events, so reopening the chat refetches a thread that already contains them.
+  //
+  // Its own effect, keyed only on the chat: putting the cleanup on the effect below — which
+  // re-runs on both edges of every fetch — would run it on the true→false edge, deleting the queue
+  // moments before that same run replayed it.
+  useEffect(() => {
+    const key = messagesQueryKey(sessionId, chatId ?? '');
+    return () => discardWritesLostToFetch(key);
+  }, [sessionId, chatId]);
+  useEffect(() => {
+    if (isFetching) return;
+    replayWritesLostToFetch(queryClient, messagesQueryKey(sessionId, chatId ?? ''));
+  }, [queryClient, isFetching, sessionId, chatId]);
+
+  return query;
+}
+
+interface PendingWrite {
+  apply: (data: MessagesData) => MessagesData;
+  /** The cache value this write produced — see replayWritesLostToFetch. */
+  wrote: MessagesData | undefined;
+}
+
+// Module scope because the helpers below are plain functions with no component to hang state on.
+const writesLostToFetch = new Map<string, PendingWrite[]>();
+
+const pendingKey = (key: MessagesQueryKey): string => JSON.stringify(key);
+
+/**
+ * Apply one change to a chat's paged cache, recording it for replay when a page is in flight.
+ *
+ * Never seeds a slice: an entry created here would be "fresh" under staleTime: Infinity, so opening
+ * the chat would skip the queryFn and show this write alone.
+ *
+ * `apply` must be idempotent: a replay can re-run it against a cache that already reflects it.
+ */
+function writeMessagesCache(
+  queryClient: QueryClient,
+  key: MessagesQueryKey,
+  apply: (data: MessagesData) => MessagesData,
+): void {
+  const state = queryClient.getQueryState<MessagesData>(key);
+  if (state?.data === undefined) return;
+  queryClient.setQueryData<MessagesData>(key, old => (old === undefined ? undefined : apply(old)));
+  if (state.fetchStatus !== 'fetching') return;
+  const id = pendingKey(key);
+  const wrote = queryClient.getQueryData<MessagesData>(key);
+  writesLostToFetch.set(id, [...(writesLostToFetch.get(id) ?? []), { apply, wrote }]);
+}
+
+/**
+ * Re-apply, in order, the writes a landed page overwrote.
+ *
+ * Only if one actually did. A fetch that FAILED leaves the cache exactly as the last queued write
+ * left it, so nothing was lost and replaying would apply the whole queue twice. Identity answers
+ * that in one comparison — a landed page always produces a new value — and it is a per-QUEUE
+ * question, not a per-entry one: either a fetch replaced the data, in which case every queued
+ * write went with it, or it did not, in which case none did.
+ */
+export function replayWritesLostToFetch(queryClient: QueryClient, key: MessagesQueryKey): void {
+  const id = pendingKey(key);
+  const queue = writesLostToFetch.get(id);
+  if (queue === undefined || queue.length === 0) return;
+  writesLostToFetch.delete(id);
+  if (queue[queue.length - 1].wrote === queryClient.getQueryData<MessagesData>(key)) return;
+  queryClient.setQueryData<MessagesData>(key, old =>
+    old === undefined ? undefined : queue.reduce((data, write) => write.apply(data), old),
+  );
+}
+
+/** Forget anything still queued for a chat, e.g. because the user moved to another one. */
+export function discardWritesLostToFetch(key: MessagesQueryKey): void {
+  writesLostToFetch.delete(pendingKey(key));
 }
 
 /**
  * Apply a list transform to every cached page. Both arrays are transformed: a message the gateway
  * never persisted exists only in `history`, so touching `db` alone would drop its edits and deletes.
- */
-function mapCachedMessages(
-  queryClient: QueryClient,
-  key: MessagesQueryKey,
-  transform: (list: ChatMessageView[]) => ChatMessageView[],
-): void {
-  queryClient.setQueryData<MessagesData>(key, old =>
-    old === undefined
-      ? undefined
-      : {
-          ...old,
-          pages: old.pages.map(page => ({
-            ...page,
-            db: transform(page.db),
-            history: transform(page.history),
-          })),
-        },
-  );
-}
-
-/**
- * Edit one chat's cached messages from outside this module, without the call site having to know
- * the paged cache shape: it hands over a plain list transform.
+ *
+ * The transform sees one page at a time, so it must not depend on the thread's order or
+ * completeness — `flattenMessagePages` answers those questions.
  */
 export function updateCachedMessages(
   queryClient: QueryClient,
   key: MessagesQueryKey,
   transform: (list: ChatMessageView[]) => ChatMessageView[],
 ): void {
-  mapCachedMessages(queryClient, key, transform);
+  writeMessagesCache(queryClient, key, data => ({
+    ...data,
+    pages: data.pages.map(page => ({ ...page, db: transform(page.db), history: transform(page.history) })),
+  }));
 }
 
 /**
@@ -116,11 +193,30 @@ export function upsertCachedMessage(
   incoming: ChatMessageView,
   options: { dropId?: string } = {},
 ): void {
-  queryClient.setQueryData<MessagesData>(key, old =>
-    old === undefined || old.pages.length === 0
-      ? undefined
-      : { ...old, pages: upsertIntoPages(old.pages, incoming, options.dropId) },
+  writeMessagesCache(queryClient, key, data =>
+    data.pages.length === 0 ? data : { ...data, pages: upsertIntoPages(data.pages, incoming, options.dropId) },
   );
+}
+
+/**
+ * The cached chats under one session that hold a matching message, as [key, flat thread] pairs.
+ *
+ * `matches` is applied to the raw pages first so only a thread that actually holds the message pays
+ * for the merge — a realtime event concerns one chat, and flattening every open one per event would
+ * sort and cap them all to throw the result away.
+ */
+export function cachedSessionThreads(
+  queryClient: QueryClient,
+  sessionId: string,
+  matches: (message: ChatMessageView) => boolean,
+): Array<[MessagesQueryKey, ChatMessageView[]]> {
+  const threads: Array<[MessagesQueryKey, ChatMessageView[]]> = [];
+  for (const [key, data] of queryClient.getQueriesData<MessagesData>({ queryKey: ['messages', sessionId] })) {
+    if (data === undefined) continue;
+    const holds = data.pages.some(page => page.db.some(matches) || page.history.some(matches));
+    if (holds) threads.push([key as MessagesQueryKey, flattenMessagePages(data)]);
+  }
+  return threads;
 }
 
 /**
@@ -133,16 +229,13 @@ export function useChatMessagesActions() {
 
   return {
     appendMessage(sessionId: string, chatId: string, msg: ChatMessageView) {
-      // Only writes to a slice that already exists. Seeding one for a never-opened chat would be
-      // "fresh" under staleTime: Infinity, so opening the chat would skip the queryFn and show this
-      // message alone.
       upsertCachedMessage(qc, messagesQueryKey(sessionId, chatId), msg);
     },
     updateMessage(sessionId: string, chatId: string, id: string, patch: Partial<ChatMessageView>) {
-      mapCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => updateMessageById(list, id, patch));
+      updateCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => updateMessageById(list, id, patch));
     },
     removeMessage(sessionId: string, chatId: string, id: string) {
-      mapCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => removeMessageById(list, id));
+      updateCachedMessages(qc, messagesQueryKey(sessionId, chatId), list => removeMessageById(list, id));
     },
   };
 }

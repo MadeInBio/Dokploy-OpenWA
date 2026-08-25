@@ -25,6 +25,8 @@ import {
   mergeDeliveryStatus,
   mergeReactionSnapshot,
   findRevokedIndex,
+  patchMatchingMessage,
+  byMessageId,
   getMediaSrc,
   type ChatMessageView,
   type MessageMedia,
@@ -39,6 +41,7 @@ import {
   useChatMessagesActions,
   messagesQueryKey,
   updateCachedMessages,
+  cachedSessionThreads,
 } from '../hooks/useChatMessages';
 import { useChannelMessages } from '../hooks/useChannelMessages';
 import { useContactStatuses } from '../hooks/useContactStatuses';
@@ -232,27 +235,13 @@ export function Chats() {
     containerRef: messagesContainerRef,
     onMessageAppended,
     onMediaLoad,
-    onOlderMessagesPrepended,
-  } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0);
+    onOlderMessagesRequested,
+  } = useChatScrollPosition(activeChat?.id ?? null, messages.length > 0, loadingOlderMessages);
 
-  // Capture the scroll geometry before the older page lands, and restore it once the new bubbles are
-  // in the DOM — otherwise the thread jumps backwards by the height of whatever was just prepended.
-  // A layout effect, not a callback on the fetch promise: the promise settles before React has
-  // committed the new rows, so restoring there would measure the old height.
-  const restoreOlderScrollRef = useRef<(() => void) | null>(null);
   const handleLoadOlderMessages = useCallback(() => {
-    restoreOlderScrollRef.current = onOlderMessagesPrepended();
+    onOlderMessagesRequested();
     void fetchNextPage();
-  }, [fetchNextPage, onOlderMessagesPrepended]);
-
-  // Also keyed on the loading flag so a page that adds nothing still clears the pending restore
-  // instead of leaving it to fire on an unrelated later render.
-  useLayoutEffect(() => {
-    const restore = restoreOlderScrollRef.current;
-    if (!restore || loadingOlderMessages) return;
-    restoreOlderScrollRef.current = null;
-    restore();
-  }, [messages.length, loadingOlderMessages]);
+  }, [fetchNextPage, onOlderMessagesRequested]);
 
   // Batch profile-picture fetch for the visible chat list — ONE request for the whole sidebar
   // (per-row queries burst the per-IP throttle into 429s). Sorted-key cached 1h; rows fall back
@@ -423,22 +412,17 @@ export function Chats() {
     (event: { sessionId: string; messageId: string; status: ChatMessageView['status'] }) => {
       if (event.sessionId !== selectedSessionId) return;
 
-      // Acks can arrive for any cached chat under this session. Walk every cache entry under
-      // ['messages', event.sessionId, *] and apply the forward-only delivery merge in place.
-      const caches = queryClient.getQueriesData<ChatMessageView[]>({
-        queryKey: ['messages', event.sessionId],
-      });
-      for (const [key, list] of caches) {
-        if (!list) continue;
-        const idx = list.findIndex(m => m.id === event.messageId || m.waMessageId === event.messageId);
-        if (idx === -1) continue;
-        const target = list[idx];
+      // Acks can arrive for any cached chat under this session, so every thread is checked.
+      for (const [key, thread] of cachedSessionThreads(queryClient, event.sessionId, byMessageId(event.messageId))) {
+        const target = thread.find(byMessageId(event.messageId));
+        if (!target) continue;
         // Backend now sends the neutral delivery status directly (no engine-specific ack codes).
         // Merge forward-only so an out-of-order/replayed lower ack can't downgrade the tick.
         const nextStatus = mergeDeliveryStatus(target.status, event.status) ?? target.status;
-        const next = list.slice();
-        next[idx] = { ...target, status: nextStatus };
-        queryClient.setQueryData(key, next);
+        if (nextStatus === target.status) continue;
+        updateCachedMessages(queryClient, key, list =>
+          patchMatchingMessage(list, event.messageId, m => ({ ...m, status: nextStatus })),
+        );
       }
     },
     [selectedSessionId, queryClient],
@@ -454,23 +438,16 @@ export function Chats() {
       //
       // The absent-vs-empty distinction on `reactions` is mergeReactionSnapshot's job; it is a named
       // function so the behaviour is covered by a test, because nothing here is.
-      const caches = queryClient.getQueriesData<ChatMessageView[]>({
-        queryKey: ['messages', event.sessionId],
-      });
-      for (const [key, list] of caches) {
-        if (!list) continue;
-        const idx = list.findIndex(m => m.id === event.messageId || m.waMessageId === event.messageId);
-        if (idx === -1) continue;
-        const target = list[idx];
-        const next = list.slice();
-        next[idx] = {
-          ...target,
-          metadata: {
-            ...(target.metadata || {}),
-            reactions: mergeReactionSnapshot(target.metadata?.reactions, event.reactions),
-          },
-        };
-        queryClient.setQueryData(key, next);
+      for (const [key] of cachedSessionThreads(queryClient, event.sessionId, byMessageId(event.messageId))) {
+        updateCachedMessages(queryClient, key, list =>
+          patchMatchingMessage(list, event.messageId, m => ({
+            ...m,
+            metadata: {
+              ...(m.metadata || {}),
+              reactions: mergeReactionSnapshot(m.metadata?.reactions, event.reactions),
+            },
+          })),
+        );
       }
     },
     [selectedSessionId, queryClient],
@@ -483,17 +460,15 @@ export function Chats() {
       // Walk every cached chat under this session, find the deleted message and zero it — the
       // backend emits an empty body; the localized "deleted" label is rendered below. Matching is
       // in findRevokedIndex: the event carries two candidate ids and wwebjs's `id` alone can miss.
-      const caches = queryClient.getQueriesData<ChatMessageView[]>({
-        queryKey: ['messages', event.sessionId],
-      });
-      for (const [key, list] of caches) {
-        if (!list) continue;
-        const idx = findRevokedIndex(list, event);
-        if (idx === -1) continue;
-        const target = list[idx];
-        const next = list.slice();
-        next[idx] = { ...target, body: '', type: asMessageType(event.type) };
-        queryClient.setQueryData(key, next);
+      const revoked = (m: ChatMessageView): boolean => findRevokedIndex([m], event) !== -1;
+      for (const [key] of cachedSessionThreads(queryClient, event.sessionId, revoked)) {
+        updateCachedMessages(queryClient, key, list => {
+          const idx = findRevokedIndex(list, event);
+          if (idx === -1) return list;
+          const next = list.slice();
+          next[idx] = { ...next[idx], body: '', type: asMessageType(event.type) };
+          return next;
+        });
       }
     },
     [selectedSessionId, queryClient],
@@ -503,23 +478,19 @@ export function Chats() {
     (event: { sessionId: string; messageId: string; chatId: string; body: string }) => {
       if (event.sessionId !== selectedSessionId) return;
 
-      const caches = queryClient.getQueriesData<ChatMessageView[]>({
-        queryKey: ['messages', event.sessionId],
-      });
       let matchedCachedMessage = false;
       let editedLastMessage = false;
-      for (const [key, list] of caches) {
-        if (!list) continue;
-        const next = applyMessageEdit(list, event);
-        if (next === list) continue;
+      for (const [key, thread] of cachedSessionThreads(queryClient, event.sessionId, byMessageId(event.messageId))) {
+        // Position is asked of the merged thread, never of a page: pages are stored as the server
+        // returns them, newest-first, so the last row of one is its OLDEST message.
+        const editedIndex = thread.findIndex(byMessageId(event.messageId));
+        if (editedIndex === -1) continue;
         matchedCachedMessage = true;
-        queryClient.setQueryData(key, next);
+        updateCachedMessages(queryClient, key, list => applyMessageEdit(list, event));
 
-        // Message caches are chronological; only editing the final row changes the sidebar preview.
-        // Confirm the cache belongs to the event chat before touching that summary.
-        const cachedChatId = Array.isArray(key) && typeof key[2] === 'string' ? key[2] : undefined;
-        const editedIndex = list.findIndex(m => m.id === event.messageId || m.waMessageId === event.messageId);
-        if (cachedChatId === event.chatId && editedIndex === list.length - 1) editedLastMessage = true;
+        // Only editing the newest row changes the sidebar preview. Confirm the thread belongs to
+        // the event chat before touching that summary.
+        if (key[2] === event.chatId && editedIndex === thread.length - 1) editedLastMessage = true;
       }
       if (editedLastMessage) {
         setChats(previous =>
