@@ -134,7 +134,14 @@ export interface BusinessClient extends Omit<
     labelId: string,
   ): Promise<
     Array<
-      | { id?: { _serialized?: string }; name?: string; isGroup?: boolean; unreadCount?: number; timestamp?: number }
+      | {
+          id?: { _serialized?: string };
+          name?: string;
+          isGroup?: boolean;
+          unreadCount?: number;
+          timestamp?: number;
+          archived?: boolean;
+        }
       | undefined
     >
   >;

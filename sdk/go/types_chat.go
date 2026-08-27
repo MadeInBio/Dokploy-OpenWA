@@ -11,6 +11,7 @@ type ChatSummary struct {
 	LastMessage string   `json:"lastMessage,omitempty"`
 	Timestamp   int64    `json:"timestamp"`
 	Kind        ChatKind `json:"kind"`
+	Archived    bool     `json:"archived"`
 }
 
 // SetOwnPresenceRequest is the body for SessionsService.SetOnlinePresence. Available reports

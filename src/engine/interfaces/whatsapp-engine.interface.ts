@@ -491,6 +491,8 @@ export interface ChatSummary {
   unreadCount: number;
   timestamp: number;
   lastMessage?: string;
+  /** Archived state, as set via `POST /sessions/{sessionId}/chats/archive`. */
+  archived: boolean;
 }
 
 /**

@@ -388,6 +388,7 @@ export class BaileysSessionStore {
       unreadCount: c.unreadCount ?? 0,
       timestamp: last?.timestamp ?? this.toUnixSeconds(c.conversationTimestamp),
       lastMessage: last?.text,
+      archived: c.archived ?? false,
     };
   }
 

@@ -888,6 +888,7 @@ class ChatSummary(TypedDict):
     lastMessage: NotRequired[str]
     timestamp: str | int
     kind: ChatKind
+    archived: bool
 
 
 class MarkChatRequest(TypedDict):

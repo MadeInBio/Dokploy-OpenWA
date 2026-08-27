@@ -417,7 +417,8 @@ Get active chats for a session, most-recent first (paginated).
     "kind": "individual",
     "unreadCount": 2,
     "timestamp": 1719306115,
-    "lastMessage": "See you tomorrow"
+    "lastMessage": "See you tomorrow",
+    "archived": false
   }
 ]
 ```

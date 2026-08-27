@@ -74,6 +74,7 @@ export class WwebjsLabels {
         kind: chatKind(id),
         unreadCount: chat.unreadCount || 0,
         timestamp: chat.timestamp || 0,
+        archived: Boolean(chat.archived),
       });
     }
     return summaries;

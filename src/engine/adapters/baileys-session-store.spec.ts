@@ -64,6 +64,7 @@ describe('BaileysSessionStore', () => {
         unreadCount: 2,
         timestamp: 200,
         lastMessage: 'newest',
+        archived: false,
       },
     ]);
     expect(store.lastMessage('628111@s.whatsapp.net')).toEqual({

@@ -942,6 +942,8 @@ export interface ChatSummary {
   /** Unix seconds of the last activity. */
   timestamp: number;
   kind: ChatKind;
+  /** Archived state, as set via {@link ChatsResource.archive}. */
+  archived: boolean;
 }
 
 /** Body for {@link SessionsResource.setOnlinePresence}. */

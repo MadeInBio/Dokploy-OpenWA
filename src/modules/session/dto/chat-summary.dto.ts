@@ -25,4 +25,7 @@ export class ChatSummaryDto {
 
   @ApiPropertyOptional({ example: 'hi' })
   lastMessage?: string;
+
+  @ApiProperty({ description: 'Archived state, as set via POST /sessions/{sessionId}/chats/archive.', example: false })
+  archived!: boolean;
 }

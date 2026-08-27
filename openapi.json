@@ -10246,6 +10246,11 @@
           "lastMessage": {
             "type": "string",
             "example": "hi"
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "Archived state, as set via POST /sessions/{sessionId}/chats/archive.",
+            "example": false
           }
         },
         "required": [
@@ -10254,7 +10259,8 @@
           "isGroup",
           "kind",
           "unreadCount",
-          "timestamp"
+          "timestamp",
+          "archived"
         ]
       },
       "MarkChatReadDto": {
