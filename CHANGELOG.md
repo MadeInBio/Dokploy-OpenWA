@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine, for large accounts whose reads fail with `Runtime.callFunctionOn timed out`. Unset keeps
   Puppeteer's own budget, so nothing changes for a deployment that does not set it. The gateway
   refuses to boot on `0` or on a value above 2147483647; see docs/12 for when to reach for it.
+- `GET /sessions/{sessionId}/chats` reports each chat's `archived` state. The archive/unarchive
+  action (`POST /sessions/{sessionId}/chats/archive`) already existed; the chat list just never
+  reported the resulting state back, so a consumer had no way to filter archived chats out of (or
+  into) its own view.
 
 ### Changed
 
