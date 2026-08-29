@@ -139,6 +139,8 @@ export interface BusinessClient extends Omit<
           unreadCount?: number;
           timestamp?: number;
           archived?: boolean;
+          pinned?: boolean;
+          isMuted?: boolean;
         }
       | undefined
     >

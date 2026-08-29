@@ -389,7 +389,26 @@ export class BaileysSessionStore {
       timestamp: last?.timestamp ?? this.toUnixSeconds(c.conversationTimestamp),
       lastMessage: last?.text,
       archived: c.archived ?? false,
+      // Baileys reports a pin as an ORDER, not a flag — 0/absent means unpinned.
+      pinned: Boolean(c.pinned),
+      muted: this.isMuted(c.muteEndTime),
     };
+  }
+
+  /**
+   * Whether a Baileys `muteEndTime` is still in the future.
+   *
+   * The unit is not fixed by the type (`number | Long`) and WhatsApp's own mute action carries a
+   * millisecond stamp while the conversation/message timestamps beside it are seconds, so the
+   * magnitude decides: below 1e12 is a second-precision stamp (1e12 ms is 2001, and no mute
+   * predates WhatsApp). Guessing wrong in either direction would report a long-expired mute as
+   * active, or an active one as expired.
+   */
+  private isMuted(muteEndTime: number | { toNumber(): number } | null | undefined): boolean {
+    const raw = this.toUnixSeconds(muteEndTime);
+    if (!raw) return false;
+    const endMs = raw < 1e12 ? raw * 1000 : raw;
+    return endMs > Date.now();
   }
 
   /**

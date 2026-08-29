@@ -215,6 +215,8 @@ export interface Chat {
   timestamp: number;
   lastMessage?: string;
   archived: boolean;
+  pinned: boolean;
+  muted: boolean;
 }
 
 // Engine-neutral message types (mirrors the backend's IWhatsAppEngine MessageType). The backend

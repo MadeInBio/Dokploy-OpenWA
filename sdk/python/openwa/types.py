@@ -889,6 +889,9 @@ class ChatSummary(TypedDict):
     timestamp: str | int
     kind: ChatKind
     archived: bool
+    pinned: bool
+    # Whether the chat is muted right now, not the expiry behind it.
+    muted: bool
 
 
 class MarkChatRequest(TypedDict):

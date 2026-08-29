@@ -42,6 +42,42 @@ describe('BaileysSessionStore', () => {
     expect(store.findContact('628222@s.whatsapp.net')?.pushName).toBe('Bob');
   });
 
+  describe('pinned and muted state', () => {
+    const chatFor = (over: Record<string, unknown>) => {
+      store.upsertChats([{ id: '628111@s.whatsapp.net', name: 'Alice', ...over }]);
+      return store.listChats()[0];
+    };
+
+    it('reads a pin as a flag, though Baileys reports it as an order', () => {
+      // proto.IConversation.pinned is a NUMBER — its position among pinned chats, not a boolean.
+      expect(chatFor({ pinned: 2 }).pinned).toBe(true);
+      expect(chatFor({ pinned: 0 }).pinned).toBe(false);
+      expect(chatFor({}).pinned).toBe(false);
+    });
+
+    it('treats a mute as active only while its end time is still ahead', () => {
+      const inAnHourMs = Date.now() + 60 * 60 * 1000;
+      const anHourAgoMs = Date.now() - 60 * 60 * 1000;
+      expect(chatFor({ muteEndTime: inAnHourMs }).muted).toBe(true);
+      expect(chatFor({ muteEndTime: anHourAgoMs }).muted).toBe(false);
+      expect(chatFor({ muteEndTime: 0 }).muted).toBe(false);
+      expect(chatFor({}).muted).toBe(false);
+    });
+
+    it('reads a second-precision end time too, since the type does not fix the unit', () => {
+      // `number | Long` says nothing about the unit, and WhatsApp's mute action carries ms while
+      // the timestamps beside it are seconds. Reading seconds as milliseconds would report every
+      // mute as expired in 1970.
+      expect(chatFor({ muteEndTime: Math.floor(Date.now() / 1000) + 3600 }).muted).toBe(true);
+      expect(chatFor({ muteEndTime: Math.floor(Date.now() / 1000) - 3600 }).muted).toBe(false);
+    });
+
+    it('accepts a Long, which is what the proto actually hands over', () => {
+      const asLong = { toNumber: () => Date.now() + 60 * 60 * 1000 };
+      expect(chatFor({ muteEndTime: asLong }).muted).toBe(true);
+    });
+  });
+
   it('records the newest message per chat and surfaces it in getChats', () => {
     store.upsertChats([{ id: '628111@s.whatsapp.net', name: 'Alice', unreadCount: 2 }]);
     store.recordMessage({
@@ -65,6 +101,8 @@ describe('BaileysSessionStore', () => {
         timestamp: 200,
         lastMessage: 'newest',
         archived: false,
+        pinned: false,
+        muted: false,
       },
     ]);
     expect(store.lastMessage('628111@s.whatsapp.net')).toEqual({

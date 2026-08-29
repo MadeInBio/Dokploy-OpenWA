@@ -15,4 +15,7 @@ public record ChatSummary(
     String lastMessage,
     Long timestamp,
     ChatKind kind,
-    Boolean archived) {}
+    Boolean archived,
+    Boolean pinned,
+    /** Whether the chat is muted right now, not the expiry behind it. */
+    Boolean muted) {}

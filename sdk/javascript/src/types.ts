@@ -944,6 +944,10 @@ export interface ChatSummary {
   kind: ChatKind;
   /** Archived state, as set via {@link ChatsResource.archive}. */
   archived: boolean;
+  /** Pinned state, as set via {@link ChatsResource.pin}. */
+  pinned: boolean;
+  /** Whether the chat is muted right now, as set via {@link ChatsResource.mute}. */
+  muted: boolean;
 }
 
 /** Body for {@link SessionsResource.setOnlinePresence}. */
