@@ -139,6 +139,20 @@ function holdOlderPage(): () => void {
 const pagedMessagesPath = (offset: number): string =>
   `/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT_2.id)}&limit=${PAGE_SIZE}&offset=${offset}`;
 
+/**
+ * Every fetch to Carol's paged route, at ANY offset. A count against one hardcoded offset (as
+ * `pagedMessagesPath` builds) proves nothing about a request at some OTHER offset — a termination
+ * rule that compares rows-held against a frozen total, instead of the short-page signal, would ask
+ * for offset 120 here (PAGE_SIZE + PAGED_OLDEST.length), which a check against, say, `2 * PAGE_SIZE`
+ * would silently miss.
+ */
+function countPagedMessagesFetches(): number {
+  const prefix = `/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT_2.id)}&limit=${PAGE_SIZE}&offset=`;
+  return fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(prefix)).length;
+}
+
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
 /** The per-message media route the omitted marker sends the viewer to. */
 const mediaPathFor = (waMessageId: string): string =>
   `/api/sessions/${SESSION.id}/messages/${encodeURIComponent(CHAT.id)}/${encodeURIComponent(waMessageId)}/media`;
@@ -644,11 +658,13 @@ test('scrolling to the top of a long thread pulls exactly one older page, then s
   // the engine-history merge would have inflated the latter past rows the DB never returned.
   await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(PAGE_SIZE)), 1));
   await within(thread).findByText('paged message 0');
+  assert.equal(countPagedMessagesFetches(), 2);
 
-  // And it ends: the older page came back short, so a further scroll asks for nothing.
+  // And it ends: the older page came back short (20 rows < PAGE_SIZE), so a further scroll asks
+  // for nothing at all — not "nothing at 2 * PAGE_SIZE" (see countPagedMessagesFetches).
   fireEvent.scroll(thread);
-  await waitFor(() => assert.equal(countFetchCalls('GET', pagedMessagesPath(PAGE_SIZE)), 1));
-  assert.equal(countFetchCalls('GET', pagedMessagesPath(2 * PAGE_SIZE)), 0);
+  await flush();
+  assert.equal(countPagedMessagesFetches(), 2);
 });
 
 test('a delivery ack reaches a message held by an older page', async () => {
@@ -757,4 +773,54 @@ test('a message arriving while an older page is in flight survives the page land
 
   // Still there, exactly once, after the page landed on top of it.
   await waitFor(() => assert.equal(within(thread).getAllByText('arrived mid-fetch').length, 1));
+});
+
+test('a write during an in-flight older page survives leaving and returning to the chat', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+
+  const releaseOlderPage = holdOlderPage();
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
+
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  socket.receive('message', {
+    type: 'event',
+    timestamp: new Date(1_700_002_100_000).toISOString(),
+    payload: {
+      event: 'message.received',
+      sessionId: SESSION.id,
+      data: {
+        id: 'wamid.live.2',
+        chatId: CHAT_2.id,
+        from: CHAT_2.id,
+        to: 'me',
+        body: 'arrived while switching away',
+        type: 'text',
+        fromMe: false,
+        timestamp: 1_700_001_600,
+      },
+    },
+  });
+  await within(thread).findByText('arrived while switching away');
+
+  // Leave Carol's room WITHOUT waiting for the older page to land — this is the regression: the
+  // in-flight fetch is not cancelled by leaving, so it still lands later and, unfixed, an unmount
+  // that forgets the queued write above leaves nothing to replay it onto the result.
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+
+  releaseOlderPage();
+
+  // Back to Carol. staleTime: Infinity means this reads the cache, not a fresh fetch — the same
+  // landed-page data the departure left behind, now with the write replayed onto it.
+  fireEvent.click(await screen.findByText('Carol'));
+  const reopened = container.querySelector('.room-messages') as HTMLElement;
+  await within(reopened).findByText('paged message 0');
+  await waitFor(() => assert.equal(within(reopened).getAllByText('arrived while switching away').length, 1));
 });

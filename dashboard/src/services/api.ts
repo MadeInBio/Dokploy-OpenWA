@@ -788,8 +788,9 @@ export const sessionApi = {
       body: JSON.stringify({ chatId }),
     }),
   // `offset` counts DB rows already fetched for this chat, never rendered rows: the thread merges
-  // these with engine history, so paging by the merged length would skip DB rows. `total` is the
-  // full row count for the chat (getManyAndCount), which is what says whether an older page exists.
+  // these with engine history, so paging by the merged length would skip DB rows. `total` is not
+  // read to decide whether an older page exists — a page short of `limit` is; a chat with live
+  // traffic keeps growing `total` after the fact, so comparing rows-held against it stops early.
   getChatMessages: (id: string, chatId: string, limit = 100, offset = 0) =>
     request<{ messages: ChatMessage[]; total: number }>(
       `/sessions/${id}/messages?chatId=${encodeURIComponent(chatId)}&limit=${limit}&offset=${offset}`,

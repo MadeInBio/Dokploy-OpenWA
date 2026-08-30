@@ -88,6 +88,7 @@
     "unreadBadge_other": "{{count}} messaggi non letti",
     "loadingMessages": "Caricamento messaggi...",
     "loadingOlderMessages": "Caricamento messaggi precedenti...",
+    "loadOlderMessagesError": "Impossibile caricare i messaggi precedenti. Scorri verso l’alto per riprovare.",
     "noMessagesInChat": "Ancora nessun messaggio. Invia il primo messaggio per iniziare!",
     "downloadDocument": "Scarica documento",
     "actions": {

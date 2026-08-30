@@ -66,6 +66,24 @@ test('live messages move the cursor without ending the paging', () => {
   assert.equal(nextMessagePageParam(pages, PAGE_SIZE), 105);
 });
 
+test('a failed send does not shift the cursor past a real row', () => {
+  // ChatComposer's tempId is `temp_${Date.now()}`; a failed one stays in page.db with
+  // status: 'failed' forever (nothing removes it). Counting it as a fetched row offsets every
+  // later page by one and permanently strands whichever real row that offset skips.
+  const pages = [page([...rows(PAGE_SIZE, 'db-'), msg('temp_1700000000000', { status: 'failed' })], PAGE_SIZE)];
+
+  assert.equal(dbRowsFetched(pages), PAGE_SIZE);
+  assert.equal(nextMessagePageParam(pages, PAGE_SIZE), PAGE_SIZE);
+});
+
+test('a genuine DB row with no waMessageId still counts', () => {
+  // The exclusion is matched on the id PREFIX, not on a missing waMessageId — that field is
+  // nullable on a real persisted row too, so using its absence as the signal would double-count.
+  const pages = [page([msg('db-1', { waMessageId: undefined })])];
+
+  assert.equal(dbRowsFetched(pages), 1);
+});
+
 test('a live message lands on the newest page', () => {
   const pages = [page([msg('new')]), page([msg('old')])];
 

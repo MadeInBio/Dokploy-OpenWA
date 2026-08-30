@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
+import { AlertCircle, ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
 import { sessionApi, type Chat } from '../../services/api';
 import { getMediaSrc, senderKey, type ChatMessageView } from '../../utils/chatMessages';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
@@ -160,12 +160,26 @@ function ChatThread({
           <ChevronDown size={22} />
         </button>
       )}
-      {/* Older-page spinner. A sibling above the thread rather than a wrapper around it, so it
-          renders over the oldest bubble without the list moving. */}
-      {loadingOlderMessages && !loadingMessages && (
+      {/* Older-page spinner, or the failure in its place. An in-flow sibling before the thread, not
+          an overlay — it pushes the oldest bubble down, which is why useChatScrollPosition reads
+          this container's height at REQUEST time (before this renders), not on whichever commit
+          happens to change it first. Shown whenever there IS a thread to sit above — including a
+          failed older-page fetch with messages already loaded, which must not fall through to the
+          full-screen error below: that would replace the loaded thread with a placeholder,
+          collapsing the scroll container so the failed page can never be retried by scrolling. */}
+      {!loadingMessages && (loadingOlderMessages || (messagesError && messages.length > 0)) && (
         <div className="messages-loading-older">
-          <Loader2 className="animate-spin" size={18} />
-          <span>{t('chats.loadingOlderMessages')}</span>
+          {loadingOlderMessages ? (
+            <>
+              <Loader2 className="animate-spin" size={18} />
+              <span>{t('chats.loadingOlderMessages')}</span>
+            </>
+          ) : (
+            <>
+              <AlertCircle size={18} />
+              <span>{t('chats.loadOlderMessagesError')}</span>
+            </>
+          )}
         </div>
       )}
       {loadingMessages ? (
@@ -173,7 +187,7 @@ function ChatThread({
           <Loader2 className="animate-spin" size={32} />
           <span>{t('chats.loadingMessages')}</span>
         </div>
-      ) : messagesError ? (
+      ) : messagesError && messages.length === 0 ? (
         <div className="messages-empty">
           <MessageSquare size={32} />
           <span>{t('chats.loadMessagesError')}</span>

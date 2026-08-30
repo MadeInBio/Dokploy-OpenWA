@@ -431,6 +431,11 @@
   flex: 1;
   padding: 1.5rem;
   overflow-y: auto;
+  /* Chrome/Firefox already adjust scrollTop on their own when content is prepended above the
+     viewport (CSS scroll anchoring). The older-page handler applies its own correction for the
+     same event, so leaving the browser's default on double-applies it. WebKit implements no
+     scroll anchoring, so this is a no-op there and the manual correction is the only one that runs. */
+  overflow-anchor: none;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;

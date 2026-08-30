@@ -22,7 +22,12 @@ export function messagesQueryKey(sessionId: string, chatId: string): MessagesQue
   return ['messages', sessionId, chatId] as const;
 }
 
-/** How many DB rows one page asks for. The gateway clamps `limit` to 100, so this is its maximum. */
+/**
+ * How many DB rows one page asks for. The gateway clamps `limit` to 100
+ * (`message.service.ts`: `Math.min(Math.max(Math.trunc(rawLimit), 1), 100)`), so this is its
+ * maximum. Termination assumes the clamp holds: a page short of THIS value is read as the last one
+ * (see `nextMessagePageParam`), so a lower clamp on the server would end paging after page one.
+ */
 export const MESSAGE_PAGE_SIZE = 100;
 
 export type MessagesData = InfiniteData<MessagePage>;
@@ -84,18 +89,14 @@ export function useChatMessages(
   // infiniteQueryBehavior reads `oldPages` in onFetch), so its result overwrites anything written
   // meanwhile — and at staleTime: Infinity no refetch brings it back. An optimistic send during
   // that window would leave the thread for good. Replay those writes on top of the landed page.
-  const { isFetching } = query;
-  // Leaving this chat drops anything still queued for it rather than holding the closures (and any
-  // base64 payload they captured) for the tab's life. Nothing is lost: the writes describe
-  // server-side events, so reopening the chat refetches a thread that already contains them.
   //
-  // Its own effect, keyed only on the chat: putting the cleanup on the effect below — which
-  // re-runs on both edges of every fetch — would run it on the true→false edge, deleting the queue
-  // moments before that same run replayed it.
-  useEffect(() => {
-    const key = messagesQueryKey(sessionId, chatId ?? '');
-    return () => discardWritesLostToFetch(key);
-  }, [sessionId, chatId]);
+  // The queue is deliberately NOT discarded when this hook unmounts (switching chats, say) — the
+  // in-flight fetch it is waiting on is not cancelled, so it still lands and overwrites the cache
+  // later regardless of whether anything is mounted to see it. Discarding here only threw the write
+  // away before that landing, since staleTime: Infinity means reopening the chat does not refetch to
+  // recover it. Left queued, remounting the same chat re-runs this effect, and the identity check in
+  // replayWritesLostToFetch still finds the landed page's value different from what was recorded.
+  const { isFetching } = query;
   useEffect(() => {
     if (isFetching) return;
     replayWritesLostToFetch(queryClient, messagesQueryKey(sessionId, chatId ?? ''));
@@ -155,11 +156,6 @@ export function replayWritesLostToFetch(queryClient: QueryClient, key: MessagesQ
   queryClient.setQueryData<MessagesData>(key, old =>
     old === undefined ? undefined : queue.reduce((data, write) => write.apply(data), old),
   );
-}
-
-/** Forget anything still queued for a chat, e.g. because the user moved to another one. */
-export function discardWritesLostToFetch(key: MessagesQueryKey): void {
-  writesLostToFetch.delete(pendingKey(key));
 }
 
 /**
