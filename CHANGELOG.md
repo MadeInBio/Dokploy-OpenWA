@@ -13,13 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine, for large accounts whose reads fail with `Runtime.callFunctionOn timed out`. Unset keeps
   Puppeteer's own budget, so nothing changes for a deployment that does not set it. The gateway
   refuses to boot on `0` or on a value above 2147483647; see docs/12 for when to reach for it.
-- `GET /sessions/{sessionId}/chats` reports each chat's `archived` state. The archive/unarchive
-  action (`POST /sessions/{sessionId}/chats/archive`) already existed; the chat list just never
-  reported the resulting state back, so a consumer had no way to filter archived chats out of (or
-  into) its own view.
+- `GET /sessions/{sessionId}/chats` reports each chat's `archived`, `pinned` and `muted` state.
+  The matching actions (`POST /sessions/{sessionId}/chats/archive`, `/pin`, `/mute`) already
+  existed; the chat list never reported the resulting state back, so a consumer had no way to
+  filter archived chats out of its own view, order pinned chats first, or honour a mute — and
+  whatsapp-web.js's `chat_archived` event is deliberately not wired, so there was no event
+  fallback either.
 
 ### Changed
 
+- `ChatSummary` grew three required fields (`archived`, `pinned`, `muted`), so the chat-list shape
+  is wider than it was. Every producer sets them and the SDK type files carry them, but code
+  holding a hand-built `ChatSummary` — a test fixture, a mock, a stub gateway — has to supply the
+  three. Required rather than optional so "not muted" never has to be read out of an absent field.
 - A whatsapp-web.js protocol timeout is no longer eligible to be classified as a dead page.
   Behaviour is unchanged on the current Puppeteer; the guard keeps a future bump from reporting a
   slow command as a transport death.
