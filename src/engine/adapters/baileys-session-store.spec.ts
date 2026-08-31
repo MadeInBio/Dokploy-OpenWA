@@ -64,12 +64,12 @@ describe('BaileysSessionStore', () => {
       expect(chatFor({}).muted).toBe(false);
     });
 
-    it('reads a second-precision end time too, since the type does not fix the unit', () => {
-      // `number | Long` says nothing about the unit, and WhatsApp's mute action carries ms while
-      // the timestamps beside it are seconds. Reading seconds as milliseconds would report every
-      // mute as expired in 1970.
-      expect(chatFor({ muteEndTime: Math.floor(Date.now() / 1000) + 3600 }).muted).toBe(true);
-      expect(chatFor({ muteEndTime: Math.floor(Date.now() / 1000) - 3600 }).muted).toBe(false);
+    it('reads the end time as milliseconds, the unit the mute round-trip is measured at', () => {
+      // chat-mute.spec.ts records the measurement: a seconds-scale value sent through
+      // chatModify({ mute }) left the chat unmuted, because that instant had already passed in
+      // 1970. Reading it back the same way keeps the write and the read on one unit — a
+      // seconds-scale stamp is an instant in 1970 here too, so it reads as expired.
+      expect(chatFor({ muteEndTime: Math.floor(Date.now() / 1000) + 3600 }).muted).toBe(false);
     });
 
     it('accepts a Long, which is what the proto actually hands over', () => {

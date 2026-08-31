@@ -398,16 +398,17 @@ export class BaileysSessionStore {
   /**
    * Whether a Baileys `muteEndTime` is still in the future.
    *
-   * The unit is not fixed by the type (`number | Long`) and WhatsApp's own mute action carries a
-   * millisecond stamp while the conversation/message timestamps beside it are seconds, so the
-   * magnitude decides: below 1e12 is a second-precision stamp (1e12 ms is 2001, and no mute
-   * predates WhatsApp). Guessing wrong in either direction would report a long-expired mute as
-   * active, or an active one as expired.
+   * The stamp is epoch MILLISECONDS, and that is measured rather than inferred: `chat-mute.spec.ts`
+   * records that a seconds-scale value sent through `chatModify({ mute })` left the chat unmuted —
+   * the instant had already passed in 1970 — while the same instant in milliseconds muted it to
+   * the expected minute. `mute-chat.dto.ts` documents the same unit on the way in. Only the proto's
+   * unsuffixed `muteEndTime` suggests otherwise, beside fields it does spell `…Ms`, and it is
+   * wrong.
    */
   private isMuted(muteEndTime: number | { toNumber(): number } | null | undefined): boolean {
-    const raw = this.toUnixSeconds(muteEndTime);
-    if (!raw) return false;
-    const endMs = raw < 1e12 ? raw * 1000 : raw;
+    // toUnixSeconds unwraps Long → number and nothing else; the unit is whatever was passed in.
+    const endMs = this.toUnixSeconds(muteEndTime);
+    if (!endMs) return false;
     return endMs > Date.now();
   }
 
