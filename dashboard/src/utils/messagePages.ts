@@ -1,9 +1,11 @@
-import { mergeOrAppendUncapped, type ChatMessageView } from './chatMessages.ts';
+import { mergeOrAppend, type ChatMessageView } from './chatMessages.ts';
 
 /**
- * One fetched slice of a chat's history. `db` and `history` stay separate because the page cursor is
- * the number of DB rows fetched, and merging first loses that count — the merged list adds engine
- * history items and drops the duplicates between the two sources.
+ * One fetched slice of a chat's history. `db` is stored ASCENDING (oldest-first) — reversed from the
+ * server's `createdAt DESC` at fetch time — so mergeOrAppend's payload cap, which strips from the
+ * front, strips the oldest rather than the newest. `db` and `history` stay separate from each other
+ * because the page cursor is the number of DB rows fetched, and merging first loses that count — the
+ * merged list adds engine history items and drops the duplicates between the two sources.
  */
 export interface MessagePage {
   db: ChatMessageView[];
@@ -50,11 +52,9 @@ const messageKey = (m: ChatMessageView): string => m.waMessageId ?? m.id;
  *
  * Which page receives it matters: a plain append (finding no match) would add a copy to every page
  * run this way, so the message is merged into the page that already holds it, landing on the newest
- * page only when no page does. Uses the uncapped merge deliberately: `page.db` is server order
- * (`createdAt DESC`, newest first), and the payload cap strips from the front of an ASCENDING list —
- * on this order it would strip the newest payloads first. The real cap already runs once, correctly
- * ordered, on the flattened thread `select` produces; capping each page too would be redundant even
- * pointed the right way, since one page rarely nears MEDIA_PAYLOAD_CACHE_LIMIT on its own.
+ * page only when no page does. mergeOrAppend's payload cap applies per page here, since page.db is
+ * ascending — this is what bounds page 0's raw base64 as live media arrives; the final cap in
+ * `select` bounds the rendered set, which is a different array by then and needs its own.
  */
 export function upsertIntoPages(pages: MessagePage[], incoming: ChatMessageView, dropId?: string): MessagePage[] {
   const trimmed = dropId
@@ -66,5 +66,5 @@ export function upsertIntoPages(pages: MessagePage[], incoming: ChatMessageView,
     : pages;
   const target = trimmed.findIndex(page => page.db.some(m => messageKey(m) === messageKey(incoming)));
   const index = target === -1 ? 0 : target;
-  return trimmed.map((page, i) => (i === index ? { ...page, db: mergeOrAppendUncapped(page.db, incoming) } : page));
+  return trimmed.map((page, i) => (i === index ? { ...page, db: mergeOrAppend(page.db, incoming) } : page));
 }

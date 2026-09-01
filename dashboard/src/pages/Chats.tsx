@@ -481,8 +481,8 @@ export function Chats() {
       let matchedCachedMessage = false;
       let editedLastMessage = false;
       for (const [key, thread] of cachedSessionThreads(queryClient, event.sessionId, byMessageId(event.messageId))) {
-        // Position is asked of the merged thread, never of a page: pages are stored as the server
-        // returns them, newest-first, so the last row of one is its OLDEST message.
+        // Position is asked of the merged thread, never of a page: pages carry only a fraction of
+        // the chat each, so "is this the last message" is only ever answerable from the whole thing.
         const editedIndex = thread.findIndex(byMessageId(event.messageId));
         if (editedIndex === -1) continue;
         matchedCachedMessage = true;

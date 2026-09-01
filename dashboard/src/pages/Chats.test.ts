@@ -126,10 +126,23 @@ const PAGED_OLDEST = Array.from({ length: 20 }, (_, i) =>
 
 // Hold the older page open so the spinner commit and the landing commit stay distinct.
 let olderPageGate: Promise<void> | null = null;
+// When true, an older-page request (any offset but 0) answers 500 instead of a page.
+let olderPageFails = false;
 
 function holdOlderPage(): () => void {
   let release!: () => void;
   olderPageGate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return release;
+}
+
+// Hold a text send open, so a test can land it at a chosen moment relative to an older-page fetch.
+let sendGate: Promise<void> | null = null;
+
+function holdSend(): () => void {
+  let release!: () => void;
+  sendGate = new Promise<void>(resolve => {
     release = resolve;
   });
   return release;
@@ -248,8 +261,16 @@ function installFetchStub(): void {
       const query = new URLSearchParams(path.slice(path.indexOf('?') + 1));
       if (query.get('chatId') === CHAT_2.id) {
         const isFirstPage = Number(query.get('offset')) === 0;
+        if (!isFirstPage && olderPageFails) return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
         const messages = isFirstPage ? PAGED_NEWEST : PAGED_OLDEST;
-        const answer = () => jsonResponse({ messages, total: PAGED_NEWEST.length + PAGED_OLDEST.length });
+        // `total` deliberately does NOT equal the 120 rows actually served (PAGED_NEWEST.length +
+        // PAGED_OLDEST.length). The current termination rule never reads this field — it stops on a
+        // page short of what it asked for — so the value doesn't matter to it either way. It matters
+        // to the TEST: a `total` that happened to equal the served row count let a reverted, WRONG
+        // rule (`rows held >= total`) terminate correctly by coincidence, so the "pulls exactly one
+        // older page, then stops" assertion below could not tell a working implementation from a
+        // broken one. Set far above what is served, that coincidence is gone.
+        const answer = () => jsonResponse({ messages, total: 500 });
         const gate = isFirstPage ? null : olderPageGate;
         return gate ? gate.then(answer) : Promise.resolve(answer());
       }
@@ -273,7 +294,8 @@ function installFetchStub(): void {
       return Promise.resolve(jsonResponse({ success: true }));
     }
     if (method === 'POST' && path === `/api/sessions/${SESSION.id}/messages/send-text`) {
-      return Promise.resolve(jsonResponse({ messageId: 'wamid.out.1', timestamp: 1_700_000_100 }));
+      const send = () => jsonResponse({ messageId: 'wamid.out.1', timestamp: 1_700_000_100 });
+      return sendGate ? sendGate.then(send) : Promise.resolve(send());
     }
     if (method === 'POST' && path === `/api/sessions/${SESSION.id}/status/send-text`) {
       return Promise.resolve(jsonResponse({ success: true }));
@@ -327,6 +349,8 @@ afterEach(() => {
   // A gate left held would stall the next test's fetch forever.
   mediaGates.clear();
   olderPageGate = null;
+  sendGate = null;
+  olderPageFails = false;
 });
 
 function renderChats(): { container: HTMLElement } {
@@ -667,6 +691,32 @@ test('scrolling to the top of a long thread pulls exactly one older page, then s
   assert.equal(countPagedMessagesFetches(), 2);
 });
 
+test('a failed older-page fetch does not blank an already-loaded thread', async () => {
+  const { fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+  olderPageFails = true;
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+
+  // The regression: ChatThread tested messagesError before messages.length, so this 500 replaced
+  // the 100 already-loaded bubbles with the full-screen error placeholder — and the collapsed
+  // container could then never regain enough height to retry by scrolling.
+  await waitFor(() => assert.ok(within(thread).queryByText('paged message 119')));
+  assert.equal(within(thread).queryByText(/couldn.t load messages/i), null, 'the full-screen error must not render');
+  assert.equal(container.querySelector('.messages-empty'), null, 'the full-screen error must not render');
+
+  // The failure shows inline, where the spinner would have — with a retry hint, since the
+  // container never collapsed and scrolling up again is still possible.
+  await waitFor(() => {
+    const inline = thread.querySelector('.messages-loading-older');
+    assert.ok(inline, 'expected an inline failure indicator');
+    assert.match(inline!.textContent ?? '', /couldn.t load older messages/i);
+  });
+});
+
 test('a delivery ack reaches a message held by an older page', async () => {
   const { fireEvent, within, waitFor } = rtl;
   resetFetchCalls();
@@ -729,6 +779,41 @@ test('the reading position is held across the commit that lands an older page', 
   // full page backwards.
   assert.equal(thread.scrollHeight - before, PAGED_OLDEST.length * BUBBLE_PX);
   assert.equal(thread.scrollTop, PAGED_OLDEST.length * BUBBLE_PX);
+});
+
+test('leaving without scrolling again restores the corrected position, not the stale pre-correction one', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+
+  // The only scroll event this test fires — the position the scroll listener's own map records —
+  // stays at 0 throughout. Everything after this is the older-page CORRECTION writing scrollTop
+  // directly (a programmatic write, which the listener does not see), not a further user scroll.
+  const releaseOlderPage = holdOlderPage();
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
+
+  releaseOlderPage();
+  await within(thread).findByText('paged message 0');
+  await waitFor(() => assert.equal(thread.querySelector('.messages-loading-older'), null));
+
+  const corrected = thread.scrollTop;
+  assert.ok(corrected > 0, 'expected the older-page correction to have moved scrollTop off 0');
+
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+
+  // Back to Carol, with no scroll event fired in between. The regression: the correction above
+  // writes scrollTop directly and skips the scroll-listener's own scrollMap.set (it is a
+  // programmatic write, not a user scroll), so without saving it explicitly the per-chat map
+  // still holds the stale value from the one real scroll this test fired, at 0 — landing the
+  // reader roughly a page above the row they were actually reading.
+  fireEvent.click(await screen.findByText('Carol'));
+  await within(thread).findByText('paged message 0');
+  assert.equal(thread.scrollTop, corrected);
 });
 
 test('a message arriving while an older page is in flight survives the page landing', async () => {
@@ -823,4 +908,50 @@ test('a write during an in-flight older page survives leaving and returning to t
   const reopened = container.querySelector('.room-messages') as HTMLElement;
   await within(reopened).findByText('paged message 0');
   await waitFor(() => assert.equal(within(reopened).getAllByText('arrived while switching away').length, 1));
+});
+
+test('a send that reconciles after the older page has already settled does not resurrect the placeholder', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  resetFetchCalls();
+  const { container } = renderChats();
+
+  const thread = await openPagedChat(container);
+
+  const releaseOlderPage = holdOlderPage();
+  makeScrollable(thread, 0);
+  fireEvent.scroll(thread);
+  await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
+
+  // Send while the older page is still in flight, so the optimistic append queues behind it —
+  // same as the write the previous test covers. The send's own HTTP response is held separately.
+  const releaseSend = holdSend();
+  const input = screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'race test message' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  await within(thread).findByText('race test message');
+
+  // Leave before either settles.
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+
+  // The order that matters: the older page lands FIRST — replay fires immediately (not on
+  // remount), reapplying the queued optimistic append onto the just-landed page. Only THEN does
+  // the send resolve, reconciling directly onto what is now an idle cache (nothing left to queue
+  // behind). If replay instead waited for a remount, it would still be pending when this second,
+  // independent write landed — and firing later, on return, would replay the stale optimistic
+  // append over the reconciled result, putting the temp placeholder back beside the real message.
+  releaseOlderPage();
+  await flush();
+  releaseSend();
+  await waitFor(() => assert.equal(countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/send-text`), 1));
+  await flush();
+
+  fireEvent.click(await screen.findByText('Carol'));
+  const reopened = container.querySelector('.room-messages') as HTMLElement;
+  await within(reopened).findByText('paged message 119');
+
+  const bubbles = within(reopened).getAllByText('race test message');
+  assert.equal(bubbles.length, 1, 'expected exactly one bubble — a resurrected placeholder would show a second');
+  const icon = bubbles[0].closest('.message-bubble')?.querySelector('.message-status-icon');
+  assert.ok(icon?.classList.contains('sent'), 'expected the reconciled (sent) row, not a reverted pending ghost');
 });

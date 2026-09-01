@@ -206,13 +206,16 @@ function mergeMessageMetadata(
  * waMessageId=WA id) and a live WS message (id=WA id) for the same WhatsApp message must dedupe,
  * not double-add. On replace, the delivery status only advances (a replayed lower `sent` echo can't
  * downgrade a delivered/read row) and metadata is merged per field (a payload-less echo can't erase
- * the existing media/quote — see mergeMessageMetadata). Returns a new array — does not mutate the
- * input. Order-agnostic: unlike {@link mergeOrAppend}, this does not cap media payloads, which
- * requires knowing which end of the list is oldest.
+ * the existing media/quote — see mergeMessageMetadata). The result is run through capMediaPayloads
+ * so a long session of incoming media can't grow the cached slice's base64 heap without bound.
+ * Returns a new array — does not mutate the input.
+ *
+ * Requires an ASCENDING (oldest-first) `list` — the cap strips from the front, so a caller holding
+ * a `createdAt DESC` page would need to reverse it first, not call this directly on server order.
  */
-export function mergeOrAppendUncapped(list: ChatMessageView[], incoming: ChatMessageView): ChatMessageView[] {
+export function mergeOrAppend(list: ChatMessageView[], incoming: ChatMessageView): ChatMessageView[] {
   const idx = list.findIndex(m => msgKey(m) === msgKey(incoming));
-  if (idx === -1) return [...list, incoming];
+  if (idx === -1) return capMediaPayloads([...list, incoming]);
   const existing = list[idx];
   const next = list.slice();
   next[idx] = {
@@ -222,16 +225,7 @@ export function mergeOrAppendUncapped(list: ChatMessageView[], incoming: ChatMes
     status: mergeDeliveryStatus(existing.status, incoming.status) ?? incoming.status,
     metadata: mergeMessageMetadata(existing.metadata, incoming.metadata),
   };
-  return next;
-}
-
-/**
- * {@link mergeOrAppendUncapped}, then capMediaPayloads so a long session of incoming media can't
- * grow the list's base64 heap without bound. Requires an ASCENDING (oldest-first) `list` — the cap
- * strips from the front, so passing a `createdAt DESC` page would strip the newest payloads first.
- */
-export function mergeOrAppend(list: ChatMessageView[], incoming: ChatMessageView): ChatMessageView[] {
-  return capMediaPayloads(mergeOrAppendUncapped(list, incoming));
+  return capMediaPayloads(next);
 }
 
 /**

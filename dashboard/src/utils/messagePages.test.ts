@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dbRowsFetched, nextMessagePageParam, upsertIntoPages, type MessagePage } from './messagePages.ts';
-import type { ChatMessageView } from './chatMessages.ts';
+import { MEDIA_PAYLOAD_CACHE_LIMIT, type ChatMessageView } from './chatMessages.ts';
 
 const PAGE_SIZE = 100;
 
@@ -28,6 +28,9 @@ const page = (db: ChatMessageView[], fetched = PAGE_SIZE, history: ChatMessageVi
 
 const rows = (count: number, prefix: string): ChatMessageView[] =>
   Array.from({ length: count }, (_, i) => msg(`${prefix}${i}`));
+
+const mediaMsg = (id: string, data: string): ChatMessageView =>
+  msg(id, { type: 'image', metadata: { media: { mimetype: 'image/jpeg', filename: `${id}.jpg`, data } } });
 
 test('the cursor counts DB rows, not the rendered merge', () => {
   // The regression this guards: engine history inflates the rendered list, so paging by its length
@@ -82,6 +85,21 @@ test('a genuine DB row with no waMessageId still counts', () => {
   const pages = [page([msg('db-1', { waMessageId: undefined })])];
 
   assert.equal(dbRowsFetched(pages), 1);
+});
+
+test('a media-heavy page 0 stays under the payload ceiling as live messages land', () => {
+  // page.db is stored ascending (reversed from the server's createdAt DESC at fetch time), so the
+  // cap that mergeOrAppend runs through upsertIntoPages strips the OLDEST payload of the page, not
+  // the newest -- the opposite of what stripping from the front would do on server order.
+  const full = [page(Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT }, (_, i) => mediaMsg(`m-${i}`, `P${i}`)))];
+
+  const result = upsertIntoPages(full, mediaMsg('m-new', 'NEW'));
+
+  const withPayload = result[0].db.filter(m => m.metadata?.media?.data);
+  assert.equal(withPayload.length, MEDIA_PAYLOAD_CACHE_LIMIT);
+  assert.equal(result[0].db[0].metadata?.media?.data, undefined); // oldest stripped
+  assert.equal(result[0].db[0].metadata?.media?.omitted, true);
+  assert.equal(result[0].db[result[0].db.length - 1].metadata?.media?.data, 'NEW'); // newest kept
 });
 
 test('a live message lands on the newest page', () => {

@@ -3,6 +3,7 @@ import {
   useQueryClient,
   type InfiniteData,
   type UseInfiniteQueryResult,
+  type QueryCacheNotifyEvent,
 } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
@@ -33,7 +34,7 @@ export const MESSAGE_PAGE_SIZE = 100;
 export type MessagesData = InfiniteData<MessagePage>;
 
 /**
- * The one flat chronological view of a paged cache. A single page is newest-first and partial, so
+ * The one flat chronological view of a paged cache. A single page is ascending but partial, so
  * neither a message's position nor its absence can be read from one.
  */
 export function flattenMessagePages(data: MessagesData): ChatMessageView[] {
@@ -51,9 +52,10 @@ export function flattenMessagePages(data: MessagesData): ChatMessageView[] {
  * never captured, with no cursor to page through. Fetched without media to keep the cache small; the
  * DB copy wins in mergeChatMessages, so recent media still renders.
  *
- * Base64 media payloads are bounded by capMediaPayloads, which now runs inside `select` and so
- * bounds the RENDERED set rather than the cache: pages accumulate raw, and the newest
- * MEDIA_PAYLOAD_CACHE_LIMIT payloads are the ones that stay renderable.
+ * Base64 media payloads are bounded twice: `mergeOrAppend` caps each page's `db` as messages land
+ * in it (so a media-heavy page 0 can't grow the cache unbounded), and `select` caps the flattened,
+ * correctly-ordered thread again for what actually renders — the two bounds cover the cache and the
+ * viewport respectively, and neither alone would cover both.
  */
 export function useChatMessages(
   sessionId: string,
@@ -75,7 +77,10 @@ export function useChatMessages(
       if (dbRes.status === 'rejected' && (!wantsHistory || historyRes.status === 'rejected')) throw dbRes.reason;
       const db = dbRes.status === 'fulfilled' ? dbRes.value : { messages: [] };
       const history = historyRes.status === 'fulfilled' ? historyRes.value.map(mapEngineHistoryMessage) : [];
-      return { db: db.messages, history, fetched: db.messages.length };
+      // The gateway answers newest-first (createdAt DESC); reversed here so `page.db` is ascending
+      // like the flattened thread. mergeOrAppend's cap strips from the front of an ascending list —
+      // storing pages in server order would make it strip the newest payloads first.
+      return { db: [...db.messages].reverse(), history, fetched: db.messages.length };
     },
     getNextPageParam: (_lastPage, allPages) => nextMessagePageParam(allPages, MESSAGE_PAGE_SIZE),
     // Consumers keep seeing one flat chronological list; paging stays inside the cache.
@@ -88,14 +93,14 @@ export function useChatMessages(
   // A page in flight carries a snapshot of `data.pages` taken when it started (TanStack's
   // infiniteQueryBehavior reads `oldPages` in onFetch), so its result overwrites anything written
   // meanwhile — and at staleTime: Infinity no refetch brings it back. An optimistic send during
-  // that window would leave the thread for good. Replay those writes on top of the landed page.
-  //
-  // The queue is deliberately NOT discarded when this hook unmounts (switching chats, say) — the
-  // in-flight fetch it is waiting on is not cancelled, so it still lands and overwrites the cache
-  // later regardless of whether anything is mounted to see it. Discarding here only threw the write
-  // away before that landing, since staleTime: Infinity means reopening the chat does not refetch to
-  // recover it. Left queued, remounting the same chat re-runs this effect, and the identity check in
-  // replayWritesLostToFetch still finds the landed page's value different from what was recorded.
+  // that window would leave the thread for good. writeMessagesCache queues those writes and
+  // schedules their replay for the moment the fetch settles (see scheduleReplayOnSettle) — not for
+  // whenever this hook next happens to mount, which is too late: another writer (the composer's own
+  // send reconciling, a socket event routed through cachedSessionThreads to a chat that is not even
+  // open) can land on the cache between the fetch settling and a remount, and a replay fired only on
+  // remount would stomp that newer write with the stale queued one. This effect stays as a second
+  // chance for the same key in case the fetch had already settled before any write ever queued for
+  // it — a normal case, and a no-op here since the queue is empty by then.
   const { isFetching } = query;
   useEffect(() => {
     if (isFetching) return;
@@ -113,8 +118,43 @@ interface PendingWrite {
 
 // Module scope because the helpers below are plain functions with no component to hang state on.
 const writesLostToFetch = new Map<string, PendingWrite[]>();
+// One queryCache subscription per key with a queue outstanding, so replay fires the instant that
+// key's fetch settles rather than whenever a consumer next mounts — see scheduleReplayOnSettle.
+const settleSubscriptions = new Map<string, () => void>();
 
 const pendingKey = (key: MessagesQueryKey): string => JSON.stringify(key);
+
+const sameQueryKey = (a: readonly unknown[], b: MessagesQueryKey): boolean =>
+  a.length === b.length && a.every((part, i) => part === b[i]);
+
+/**
+ * Fire replayWritesLostToFetch for `key` the moment its query stops fetching, independent of
+ * whether any component watching it is mounted. Self-unsubscribes on that event or on the query
+ * being removed from the cache entirely (gcTime elapsed with nothing open) — replaying onto a
+ * query that no longer exists would just reseed a phantom entry, which writeMessagesCache's own
+ * "never seed a slice" rule exists to prevent.
+ *
+ * Idempotent to call redundantly: only takes effect while no subscription is already tracked for
+ * this key (writeMessagesCache only calls it when the queue transitions from empty to non-empty).
+ */
+function scheduleReplayOnSettle(queryClient: QueryClient, key: MessagesQueryKey): void {
+  const id = pendingKey(key);
+  if (settleSubscriptions.has(id)) return;
+  const unsubscribe = queryClient.getQueryCache().subscribe((event: QueryCacheNotifyEvent) => {
+    if (!sameQueryKey(event.query.queryKey, key)) return;
+    if (event.type === 'removed') {
+      settleSubscriptions.delete(id);
+      unsubscribe();
+      writesLostToFetch.delete(id);
+      return;
+    }
+    if (event.query.state.fetchStatus === 'fetching') return;
+    settleSubscriptions.delete(id);
+    unsubscribe();
+    replayWritesLostToFetch(queryClient, key);
+  });
+  settleSubscriptions.set(id, unsubscribe);
+}
 
 /**
  * Apply one change to a chat's paged cache, recording it for replay when a page is in flight.
@@ -134,8 +174,10 @@ function writeMessagesCache(
   queryClient.setQueryData<MessagesData>(key, old => (old === undefined ? undefined : apply(old)));
   if (state.fetchStatus !== 'fetching') return;
   const id = pendingKey(key);
+  const queued = writesLostToFetch.get(id) ?? [];
   const wrote = queryClient.getQueryData<MessagesData>(key);
-  writesLostToFetch.set(id, [...(writesLostToFetch.get(id) ?? []), { apply, wrote }]);
+  writesLostToFetch.set(id, [...queued, { apply, wrote }]);
+  if (queued.length === 0) scheduleReplayOnSettle(queryClient, key);
 }
 
 /**
@@ -146,6 +188,11 @@ function writeMessagesCache(
  * that in one comparison — a landed page always produces a new value — and it is a per-QUEUE
  * question, not a per-entry one: either a fetch replaced the data, in which case every queued
  * write went with it, or it did not, in which case none did.
+ *
+ * Called right as the fetch that could have clobbered the queue settles (scheduleReplayOnSettle),
+ * so this identity check is comparing against the immediately-landed page, before any OTHER writer
+ * gets a turn — that ordering is what keeps a later, unrelated write from being overwritten by a
+ * stale replay that only fired once some consumer happened to remount.
  */
 export function replayWritesLostToFetch(queryClient: QueryClient, key: MessagesQueryKey): void {
   const id = pendingKey(key);

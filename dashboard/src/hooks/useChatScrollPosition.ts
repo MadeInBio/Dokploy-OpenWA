@@ -55,6 +55,10 @@ export function decideRestoreTarget(
  *   top"). While pinned, each `onMediaLoad` re-pins to the bottom; the pin
  *   releases as soon as the USER scrolls away from the bottom (and re-arms when
  *   they scroll back), so late-decoding media never yanks a reading user.
+ * - Reading further back: the same late-decode growth, above a viewport that is
+ *   NOT pinned to the bottom, holds the user's position instead of re-pinning —
+ *   `onMediaLoad`'s third branch, since a decode there has no requesting call to
+ *   snapshot a "before" height from the way `onOlderMessagesRequested` does.
  *
  * Mount the returned `containerRef` on the scroll container (the `.room-messages`
  * div in Chats.tsx). The Map of saved positions lives in a ref so it doesn't
@@ -95,6 +99,9 @@ export function useChatScrollPosition(
   const prevScrollHeightRef = useRef<number>(0);
   const awaitingOlderPageRef = useRef<boolean>(false);
   const wasFetchingOlderRef = useRef<boolean>(false);
+  // The container's height as of the last commit this hook has accounted for — see the "always
+  // sync" layout effect and onMediaLoad's unpinned branch below.
+  const lastCommittedHeightRef = useRef<number>(0);
 
   const writeScrollTop = useCallback((el: HTMLDivElement, top: number) => {
     const before = el.scrollTop;
@@ -188,7 +195,25 @@ export function useChatScrollPosition(
     // BOTTOM where no correction is wanted — one bubble of overshoot in that race, against a whole
     // page of it if the prepend went uncorrected.
     const grew = el.scrollHeight - prevScrollHeightRef.current;
-    if (grew > 0) writeScrollTop(el, el.scrollTop + grew);
+    if (grew > 0) {
+      const corrected = el.scrollTop + grew;
+      writeScrollTop(el, corrected);
+      // writeScrollTop marks this as a programmatic write, so the scroll listener's own
+      // scrollMap.set skips it — without saving it here too, the map keeps whatever the user's
+      // last REAL scroll left there, which is necessarily above the paging threshold (that is
+      // what triggered this fetch). Leaving without scrolling again and coming back would restore
+      // to that stale, too-high spot instead of the corrected one actually being read.
+      if (activeChatId !== null) scrollMap.current.set(activeChatId, corrected);
+    }
+  });
+
+  // Keeps lastCommittedHeightRef in sync with every commit's actual height, so onMediaLoad's
+  // unpinned branch below always has a same-commit baseline to diff a decode's growth against —
+  // no dep array, same reasoning as the scroll-listener effect above: it must run every render to
+  // stay current, not just when some particular prop happens to change.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (el) lastCommittedHeightRef.current = el.scrollHeight;
   });
 
   const onOlderMessagesRequested = useCallback(() => {
@@ -220,6 +245,13 @@ export function useChatScrollPosition(
   // while a 'saved' restore is pending, each decode RE-APPLIES the saved scrollTop (the first write
   // was clamped to the pre-decode scrollHeight). A user scroll clears both, so late-decoding media
   // never yanks a reading user.
+  //
+  // Reading further back through media-heavy history is the third case: not pinned, nothing
+  // pending. A decode above the viewport still grows the thread with no reserved box (there is no
+  // width/height in the media metadata to size one from up front), pushing what the user is
+  // reading down exactly like an unabsorbed older-page prepend — held the same way, against the
+  // last height this hook has seen rather than a snapshot taken at some fixed "request" moment,
+  // since there is no equivalent request event for a decode to hang one on.
   const onMediaLoad = useCallback(() => {
     const pending = pendingRestoreRef.current;
     if (pending !== null) {
@@ -229,12 +261,24 @@ export function useChatScrollPosition(
       });
       return;
     }
-    if (!pinnedRef.current) return;
+    if (pinnedRef.current) {
+      requestAnimationFrame(() => {
+        const cur = containerRef.current;
+        if (cur && pinnedRef.current) pinToBottom(cur);
+      });
+      return;
+    }
     requestAnimationFrame(() => {
       const cur = containerRef.current;
-      if (cur && pinnedRef.current) pinToBottom(cur);
+      if (!cur) return;
+      const grew = cur.scrollHeight - lastCommittedHeightRef.current;
+      if (grew <= 0) return;
+      const corrected = cur.scrollTop + grew;
+      writeScrollTop(cur, corrected);
+      lastCommittedHeightRef.current = cur.scrollHeight;
+      if (activeChatId !== null) scrollMap.current.set(activeChatId, corrected);
     });
-  }, [pinToBottom, writeScrollTop]);
+  }, [activeChatId, pinToBottom, writeScrollTop]);
 
   return { containerRef, onMessageAppended, onMediaLoad, onOlderMessagesRequested };
 }
