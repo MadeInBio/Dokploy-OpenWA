@@ -680,7 +680,8 @@
       "progress": "{{total}}개 중 {{sent}}개 전송됨 · {{failed}}개 실패 · {{pending}}개 대기 중",
       "cancel": "배치 취소",
       "cancelling": "취소 중..."
-    }
+    },
+    "bulkRecipientsUpload": "CSV/TXT 업로드"
   },
   "infrastructure": {
     "title": "인프라",

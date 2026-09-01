@@ -680,7 +680,8 @@
       "progress": "{{sent}} von {{total}} gesendet · {{failed}} fehlgeschlagen · {{pending}} ausstehend",
       "cancel": "Batch abbrechen",
       "cancelling": "Wird abgebrochen..."
-    }
+    },
+    "bulkRecipientsUpload": "CSV/TXT hochladen"
   },
   "infrastructure": {
     "title": "Infrastruktur",

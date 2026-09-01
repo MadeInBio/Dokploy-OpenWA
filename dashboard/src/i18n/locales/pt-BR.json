@@ -634,7 +634,8 @@
       "progress": "Enviadas {{sent}} de {{total}} · {{failed}} falharam · {{pending}} pendentes",
       "cancel": "Cancelar lote",
       "cancelling": "Cancelando..."
-    }
+    },
+    "bulkRecipientsUpload": "Enviar CSV/TXT"
   },
   "templates": {
     "title": "Modelos",

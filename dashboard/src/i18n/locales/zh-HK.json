@@ -680,7 +680,8 @@
       "progress": "已發送 {{sent}}/{{total}} · {{failed}} 失敗 · {{pending}} 待發送",
       "cancel": "取消批次",
       "cancelling": "取消中..."
-    }
+    },
+    "bulkRecipientsUpload": "上傳 CSV/TXT"
   },
   "infrastructure": {
     "title": "基礎架構",

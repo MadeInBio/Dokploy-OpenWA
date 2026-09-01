@@ -695,7 +695,8 @@
       "progress": "تم إرسال {{sent}} من {{total}} · {{failed}} فشلت · {{pending}} قيد الانتظار",
       "cancel": "إلغاء الدفعة",
       "cancelling": "جارٍ الإلغاء..."
-    }
+    },
+    "bulkRecipientsUpload": "تحميل CSV/TXT"
   },
   "infrastructure": {
     "title": "البنية التحتية",

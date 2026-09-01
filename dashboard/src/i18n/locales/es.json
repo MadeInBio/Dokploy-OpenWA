@@ -634,7 +634,8 @@
       "progress": "Enviados {{sent}} de {{total}} · {{failed}} fallidos · {{pending}} pendientes",
       "cancel": "Cancelar lote",
       "cancelling": "Cancelando..."
-    }
+    },
+    "bulkRecipientsUpload": "Subir CSV/TXT"
   },
   "templates": {
     "title": "Plantillas",

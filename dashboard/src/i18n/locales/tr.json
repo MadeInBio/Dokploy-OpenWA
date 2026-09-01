@@ -680,7 +680,8 @@
       "progress": "{{total}} içerisinden {{sent}} gönderildi · {{failed}} başarısız · {{pending}} beklemede",
       "cancel": "Toplu İşlemi İptal Et",
       "cancelling": "İptal ediliyor..."
-    }
+    },
+    "bulkRecipientsUpload": "CSV/TXT Yükle"
   },
   "infrastructure": {
     "title": "Altyapı",

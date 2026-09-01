@@ -689,7 +689,8 @@
       "progress": "נשלחו {{sent}} מתוך {{total}} · {{failed}} נכשלו · {{pending}} ממתינים",
       "cancel": "ביטול אצווה",
       "cancelling": "מבטל..."
-    }
+    },
+    "bulkRecipientsUpload": "העלה CSV/TXT"
   },
   "infrastructure": {
     "title": "תשתית",

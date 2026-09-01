@@ -189,6 +189,35 @@ export function MessageTester() {
     }, 2000);
   };
 
+  const handleBulkFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text = ev.target?.result as string;
+      if (!text) return;
+
+      const extracted = text
+        .split(/[\r\n,]+/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+
+      if (extracted.length === 0) return;
+
+      setBulkRecipients(prev => {
+        const prevList = prev
+          .split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length > 0);
+        const combined = Array.from(new Set([...prevList, ...extracted]));
+        return combined.join('\n');
+      });
+    };
+    reader.readAsText(file);
+  };
+
   const handleCancelBatch = async () => {
     if (!batchStatus || !batchSessionRef.current) return;
     setBatchCancelling(true);
@@ -805,7 +834,39 @@ export function MessageTester() {
           {messageType === 'bulk' && (
             <>
               <div className="form-group">
-                <label htmlFor="mt-11">{t('messageTester.bulkRecipients')}</label>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <label htmlFor="mt-11" style={{ marginBottom: 0 }}>
+                    {t('messageTester.bulkRecipients')}
+                  </label>
+                  <label
+                    className="upload-btn"
+                    style={{
+                      margin: 0,
+                      padding: '4px 8px',
+                      fontSize: '0.85rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '4px',
+                      textTransform: 'none',
+                      fontWeight: 500,
+                      letterSpacing: 'normal',
+                    }}
+                  >
+                    <Upload size={14} style={{ marginRight: '6px' }} />
+                    {t('messageTester.bulkRecipientsUpload')}
+                    <input type="file" accept=".txt,.csv" onChange={handleBulkFileChange} style={{ display: 'none' }} />
+                  </label>
+                </div>
                 <textarea
                   id="mt-11"
                   value={bulkRecipients}
