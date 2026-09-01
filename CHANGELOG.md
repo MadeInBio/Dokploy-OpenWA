@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A whatsapp-web.js protocol timeout is no longer eligible to be classified as a dead page.
   Behaviour is unchanged on the current Puppeteer; the guard keeps a future bump from reporting a
   slow command as a transport death.
+- `GET /sessions/{sessionId}/contacts` declares `503` in the contract and answers it when the
+  whatsapp-web.js page dies mid-read, instead of a bare `500`. Thanks @Deyvis17GY.
 
 ### Fixed
 
@@ -37,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the library still calls it positionally, so `widToGroupJid` threw inside the page. A new
   install-time patch (🔧⁹, docs/29) sends the options object; an empty description still clears.
   `setGroupSubject` was never affected and Baileys is unchanged. Thanks @purnamcommunity.
+- whatsapp-web.js contact reads resolve the renamed `$1` serialized-id field, so contacts keep their
+  `id` on a WhatsApp Web build that renamed it; an entry with no readable id is skipped and counted
+  in the log. Thanks @Deyvis17GY.
 - Inbound media whose download fails now keeps the `media` envelope with `omitted: true` and the declared
   size, on both engines, instead of dropping the field and looking like a message that never had media.
 - Webhook filters and automation rules gated on `hasMedia` now match those messages.
