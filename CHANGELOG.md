@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Each engine now names the install-time patches its library is missing as it starts, rather than
+  only the message-id backport. A source install applies them with `--best-effort`, so a patch that
+  could not apply left one line in the `npm install` transcript and nothing afterwards; the
+  capability it repairs then failed with an error that named no cause. Diagnostic only, startup
+  continues. See docs/12 for the procedure.
 - The dashboard's API Keys page can limit an operator or viewer key to chosen sessions, on creation
   and on a key that already exists. Leaving the picker empty keeps access to every session, including
   ones created later, and the keys table shows each key's scope. `allowedSessions` was already

@@ -131,6 +131,13 @@ OpenWA ships nine exact, self-disabling source transforms over the installed eng
 patcher no-ops once the fix is present upstream, and an unrecognized source shape fails loudly
 rather than shipping a silently partial patch.
 
+"Fails loudly" holds for the image build, not for `npm install`, where `--best-effort` turns a
+refusal into one line of a long transcript. So each patcher also exports an `isApplied()` predicate,
+its own stand-down branch read back against the installed file, and each engine reports the patches
+it is missing as it starts (`src/engine/adapters/engine-patch-status.ts`; 🔧¹ keeps the separate
+check described below). The report is diagnostic, not preventive: startup continues, so a session
+reaching READY is not evidence that every patch landed. See docs/12 for the operator procedure.
+
 ### 29.3.1 The nine patches
 
 | #   | Patcher                                                    | Library target                       | What it repairs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Stand-down predicate                                                                                                                                                                                                                                                                                                                                                  |
