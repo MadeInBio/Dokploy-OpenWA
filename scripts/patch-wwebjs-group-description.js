@@ -61,6 +61,19 @@ function occurrences(source, needle) {
   return source.split(needle).length - 1;
 }
 
+/**
+ * The stand-down branch below as a predicate, for the startup guard (engine-patch-status.ts).
+ * Unreadable reads as applied: a tree we cannot inspect is not evidence of a broken one.
+ */
+function isApplied(wwjsDir = DEFAULT_WWJS) {
+  try {
+    const source = fs.readFileSync(path.join(wwjsDir, GROUP_CHAT_PATH), 'utf8');
+    return occurrences(source, OPTIONS_CALL) === 1 && occurrences(source, POSITIONAL_CALL) === 0;
+  } catch {
+    return true;
+  }
+}
+
 function applyGroupDescriptionFix(wwjsDir = DEFAULT_WWJS) {
   const groupChatFile = path.join(wwjsDir, GROUP_CHAT_PATH);
   if (!fs.existsSync(groupChatFile)) {
@@ -105,4 +118,4 @@ function run() {
 
 if (require.main === module) run();
 
-module.exports = { applyGroupDescriptionFix, POSITIONAL_CALL, OPTIONS_CALL };
+module.exports = { applyGroupDescriptionFix, isApplied, POSITIONAL_CALL, OPTIONS_CALL };
