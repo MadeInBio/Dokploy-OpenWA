@@ -1156,7 +1156,7 @@ curl -X POST "$BASE/api/sessions/$SESSION_ID/webhooks" \
   -d '{
     "url": "https://your-server.com/webhook",
     "events": ["message.received", "session.status"],
-    "secret": "your-secret-key",
+    "secret": "your-webhook-signing-secret",
     "headers": { "X-Custom-Header": "value" },
     "filters": {
       "conditions": [

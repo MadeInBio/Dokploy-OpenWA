@@ -10815,12 +10815,14 @@
           },
           "secret": {
             "type": "string",
-            "description": "Secret key for HMAC signature verification",
-            "example": "your-secret-key"
+            "description": "Secret key for HMAC signature verification. Never returned by any webhook route; it is used to compute the `X-OpenWA-Signature: sha256=<hex>` header on every delivery.",
+            "minLength": 16,
+            "maxLength": 255,
+            "example": "your-webhook-signing-secret"
           },
           "headers": {
             "type": "object",
-            "description": "Custom headers to include in webhook requests",
+            "description": "Custom headers to include in webhook requests. Never returned by any webhook route. At delivery, `content-type` and `x-openwa-*` names are stripped so a custom header cannot shadow a system one.",
             "example": {
               "X-Custom-Header": "value"
             }
@@ -11007,11 +11009,15 @@
           },
           "secret": {
             "type": "string",
-            "description": "Secret key for HMAC signature"
+            "description": "Secret key for HMAC signature. At least 16 characters, or an empty string to clear it. Never returned by any webhook route.",
+            "maxLength": 255
           },
           "headers": {
             "type": "object",
-            "description": "Custom headers"
+            "description": "Custom headers. Replaces the stored map wholesale. Never returned by any webhook route.",
+            "example": {
+              "X-Custom-Header": "value"
+            }
           },
           "filters": {
             "description": "Optional smart pre-filter. When set, every condition must match (AND) for the webhook to fire. Omit or null to fire on every subscribed event.",
