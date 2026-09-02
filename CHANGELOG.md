@@ -81,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `STORAGE_TYPE=s3` missing `S3_ACCESS_KEY_ID` or `S3_SECRET_ACCESS_KEY` now warns at startup and names
   the one that is unset, instead of silently writing every file to local disk and leaving the bucket
   empty. Thanks @onepay-ye.
+- Six whatsapp-web.js contact operations answer the `503` their routes document when the browser page
+  dies mid-request, instead of a bare `500` that tells a client not to retry: blocked contacts, number
+  lookup, addressbook save and delete, and block and unblock. The list and single-contact reads in the
+  same file already made that split ([#1476](https://github.com/rmyndharis/OpenWA/issues/1476)).
+  Thanks @onepay-ye.
 
 ### Dependencies
 
