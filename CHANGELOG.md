@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Paged lists now tiebreak on `id`, so a walk returns every row exactly once. Neither `createdAt` nor
+  a search relevance score is unique, and on PostgreSQL two identical statements could sort one tie
+  group differently, silently repeating some rows and omitting others: a 5000-row message list lost
+  23 rows per walk, and an ordinary search repeated a row by the third page. Affects the message,
+  session, webhook and webhook delivery-failure lists and `GET /search`. `offset` still addresses a
+  position by count, so a list taking concurrent writes can still shift under a walk.
+
 - `PUT /sessions/{sessionId}/groups/{groupId}/description` no longer fails with a bare `500` on
   whatsapp-web.js. `WAWebGroupModifyInfoJob.setGroupDescription` now takes a single options object
   and the library still calls it positionally, so `widToGroupJid` threw inside the page. A new

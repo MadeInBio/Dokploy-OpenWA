@@ -316,7 +316,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // allowlist) lists all — mirroring the ApiKeyGuard allowedSessions model so a scoped key
     // cannot enumerate every session through this aggregate route.
     const { limit, offset } = resolveListWindow(opts.limit, opts.offset);
-    const options: FindManyOptions<Session> = { order: { createdAt: 'DESC' }, take: limit, skip: offset };
+    // `id` tiebreaks the second-resolution `createdAt` so a paged walk has a total order.
+    const options: FindManyOptions<Session> = {
+      order: { createdAt: 'DESC', id: 'DESC' },
+      take: limit,
+      skip: offset,
+    };
     if (allowedSessions && allowedSessions.length > 0) {
       options.where = { id: In(allowedSessions) };
     }

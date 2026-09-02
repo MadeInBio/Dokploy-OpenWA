@@ -236,6 +236,13 @@ export class MessageService implements PluginMessagePort {
       .createQueryBuilder('message')
       .where('message.sessionId = :sessionId', { sessionId })
       .orderBy('message.createdAt', 'DESC')
+      // `createdAt` is not unique: SQLite stores whole seconds, Postgres NOW() is transaction-scoped
+      // so a bulk write ties every row, and a history backfill stamps WhatsApp's own second-resolution
+      // timestamp. Without a tiebreaker the tie group's order is whatever the plan produces, and
+      // Postgres sorts it differently between two statements, so a page walk repeats some rows and
+      // never returns others. `id` is random, not chronological, but it is unique and stable, which
+      // is all a total order needs.
+      .addOrderBy('message.id', 'DESC')
       .skip(offset)
       .take(limit);
 

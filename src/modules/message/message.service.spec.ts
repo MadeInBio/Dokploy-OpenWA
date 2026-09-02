@@ -144,6 +144,7 @@ describe('MessageService', () => {
     interface QbMock {
       where: jest.Mock;
       orderBy: jest.Mock;
+      addOrderBy: jest.Mock;
       skip: jest.Mock;
       take: jest.Mock;
       andWhere: jest.Mock;
@@ -153,6 +154,7 @@ describe('MessageService', () => {
       const qb: QbMock = {
         where: jest.fn(),
         orderBy: jest.fn(),
+        addOrderBy: jest.fn(),
         skip: jest.fn(),
         take: jest.fn(),
         andWhere: jest.fn(),
@@ -160,6 +162,7 @@ describe('MessageService', () => {
       };
       qb.where.mockReturnValue(qb);
       qb.orderBy.mockReturnValue(qb);
+      qb.addOrderBy.mockReturnValue(qb);
       qb.skip.mockReturnValue(qb);
       qb.take.mockReturnValue(qb);
       qb.andWhere.mockReturnValue(qb);
@@ -198,6 +201,7 @@ describe('MessageService', () => {
       const qb = {
         where: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
         andWhere: jest
@@ -273,6 +277,7 @@ describe('MessageService', () => {
       const qb = {
         where: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
         andWhere: jest
@@ -341,6 +346,7 @@ describe('MessageService', () => {
       const qb = {
         where: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
         andWhere: jest
@@ -429,6 +435,7 @@ describe('MessageService', () => {
       const qb = {
         where: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
         take: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockImplementation((_clause: string, params?: { chatIds?: string[] }) => {
@@ -884,6 +891,7 @@ describe('MessageService', () => {
           where: jest.fn().mockReturnThis(),
           andWhere: jest.fn().mockReturnThis(),
           orderBy: jest.fn().mockReturnThis(),
+          addOrderBy: jest.fn().mockReturnThis(),
           skip: jest.fn().mockReturnThis(),
           take: jest.fn().mockReturnThis(),
           getManyAndCount: jest.fn().mockResolvedValue([rows, 100]),
