@@ -25,6 +25,7 @@ jest.mock('@aws-sdk/client-s3', () => {
 });
 
 import { S3Client } from '@aws-sdk/client-s3';
+import { LoggerService } from '../services/logger.service';
 import { StorageService } from './storage.service';
 
 // The subset of the AWS SDK's S3Client config this service sets — used purely to type the mock's call
@@ -113,13 +114,20 @@ describe('StorageService (s3) client init', () => {
     expect(svc.isS3Available()).toBe(true);
   });
 
-  it('falls back to local (no client) when credentials are missing', async () => {
+  it('falls back to local (no client) when credentials are missing, and says so', async () => {
+    // Without a client none of the S3 logging further down ever runs, so this fallback used to be
+    // the one that produced no output at all: the bucket simply stayed empty. Name the two vars
+    // that fix it, since that is the whole point of warning here.
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
     const svc = new StorageService(makeConfig({ region: 'us-east-1' }));
     await flush();
 
     expect(mockedS3Client).not.toHaveBeenCalled();
     expect(svc.isS3Available()).toBe(false);
     expect(svc.getCurrentStorageType()).toBe('s3');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('S3_ACCESS_KEY_ID'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('S3_SECRET_ACCESS_KEY'));
+    warn.mockRestore();
   });
 
   it('prefers canonical env names (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) over config', async () => {

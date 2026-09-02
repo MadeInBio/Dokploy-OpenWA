@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The webhook `secret` example in Swagger and the API reference was shorter than the 16-character floor
   the route enforces, so pasting it back answered `400`; it now passes, and the schema publishes the
   length bounds ([#1491](https://github.com/rmyndharis/OpenWA/issues/1491)). Thanks @onepay-ye.
+- `STORAGE_TYPE=s3` with no `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` now warns at startup instead of
+  silently writing every file to local disk and leaving the bucket empty. Thanks @onepay-ye.
 
 ### Dependencies
 

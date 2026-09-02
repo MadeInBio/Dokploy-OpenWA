@@ -92,6 +92,16 @@ export class StorageService implements OnModuleDestroy {
         this.s3Bucket = process.env.S3_BUCKET || s3Config.bucket || 'openwa';
         void this.initializeS3Bucket();
         this.startS3Reprobe();
+      } else {
+        // Every other degradation in this service announces itself, but this one could not: the
+        // logging all lives past the client construction above, so an s3 deployment missing its
+        // credentials built no client, wrote every file to local disk, and said nothing at all.
+        // The operator's first symptom was an empty bucket with no failure to point at.
+        this.logger.warn(
+          `STORAGE_TYPE=s3 but no S3 credentials were found; media is being written to the local dir ` +
+            `'${this.localPath}' instead of the bucket. Set S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY ` +
+            `(the built-in MinIO uses minioadmin/minioadmin).`,
+        );
       }
     }
 
