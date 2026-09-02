@@ -52,10 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Webhook filters and automation rules gated on `hasMedia` now match those messages.
 - Baileys logs a failed inbound media download at `warn` instead of `debug`, so it is visible by default.
 - The webhook `secret` example in Swagger and the API reference was shorter than the 16-character floor
-  the route enforces, so pasting it back answered `400`; it now passes, and the schema publishes the
-  length bounds ([#1491](https://github.com/rmyndharis/OpenWA/issues/1491)). Thanks @onepay-ye.
-- `STORAGE_TYPE=s3` with no `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` now warns at startup instead of
-  silently writing every file to local disk and leaving the bucket empty. Thanks @onepay-ye.
+  the route enforces, so pasting it back answered `400`. The example now passes, and both webhook routes
+  publish the length rule they enforce ([#1491](https://github.com/rmyndharis/OpenWA/issues/1491)).
+  Thanks @onepay-ye.
+- `STORAGE_TYPE=s3` missing `S3_ACCESS_KEY_ID` or `S3_SECRET_ACCESS_KEY` now warns at startup and names
+  the one that is unset, instead of silently writing every file to local disk and leaving the bucket
+  empty. Thanks @onepay-ye.
 
 ### Dependencies
 
