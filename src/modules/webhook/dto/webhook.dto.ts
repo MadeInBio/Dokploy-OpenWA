@@ -208,7 +208,11 @@ export class UpdateWebhookDto {
       'Secret key for HMAC signature. At least 16 characters, or an empty string to clear it. ' +
       'Never returned by any webhook route.',
     maxLength: 255,
-    example: 'your-webhook-signing-secret',
+    // Deliberately no `example`, unlike create. This route patches a webhook that is already
+    // signing deliveries, and a prefilled secret submitted whole would replace a working key with
+    // a published one: every later delivery still verifies, so nothing looks broken while the
+    // signature is forgeable by anyone reading these docs. The floor belongs in the description
+    // here, where it costs a `400` to ignore rather than a silent downgrade.
   })
   @IsOptional()
   @IsString()

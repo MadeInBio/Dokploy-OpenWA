@@ -256,7 +256,9 @@ describe('every JSON request body publishes an object schema', () => {
  * ([#1491](https://github.com/rmyndharis/OpenWA/issues/1491)).
  *
  * Only length is checked here. It is the constraint a hand-written example actually drifts past, and
- * it needs no validator: the bound and the example sit in the same schema object.
+ * it needs no validator: the bound and the example sit in the same schema object. The sweep covers
+ * the top-level string properties of each component schema, which is where a hand-written
+ * `@ApiProperty` example lives; nested and composed schemas are out of its reach.
  */
 describe('every published string example fits its own schema', () => {
   type Example = { where: string; example: string; min?: number; max?: number };

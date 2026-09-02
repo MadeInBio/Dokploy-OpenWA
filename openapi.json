@@ -11010,8 +11010,7 @@
           "secret": {
             "type": "string",
             "description": "Secret key for HMAC signature. At least 16 characters, or an empty string to clear it. Never returned by any webhook route.",
-            "maxLength": 255,
-            "example": "your-webhook-signing-secret"
+            "maxLength": 255
           },
           "headers": {
             "type": "object",

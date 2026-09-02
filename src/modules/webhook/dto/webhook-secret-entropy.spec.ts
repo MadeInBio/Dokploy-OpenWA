@@ -82,22 +82,25 @@ describe('the documented secret example', () => {
   const exampleOf = (target: object, property: string): unknown =>
     (Reflect.getMetadata('swagger/apiModelProperties', target, property) as { example?: unknown } | undefined)?.example;
 
-  it('is published on both routes', () => {
+  it('is published on the create route', () => {
     expect(typeof exampleOf(CreateWebhookDto.prototype, 'secret')).toBe('string');
-    expect(typeof exampleOf(UpdateWebhookDto.prototype, 'secret')).toBe('string');
   });
 
+  // Scoped to `secret` like the suites above: a required field added to this DTO later would fail a
+  // whole-object assertion here for a reason that has nothing to do with the example under test.
   it('passes the validation the create route applies to it', async () => {
     const dto = new CreateWebhookDto();
     dto.url = 'https://receiver.example.com/hook';
     dto.events = ['message.received'];
     dto.secret = exampleOf(CreateWebhookDto.prototype, 'secret') as string;
-    expect(await validate(dto)).toEqual([]);
+    const errors = await validate(dto);
+    expect(errors.filter(e => e.property === 'secret')).toEqual([]);
   });
 
-  it('passes the validation the update route applies to it', async () => {
-    const dto = new UpdateWebhookDto();
-    dto.secret = exampleOf(UpdateWebhookDto.prototype, 'secret') as string;
-    expect(await validate(dto)).toEqual([]);
+  // The update route publishes no example on purpose (see the DTO), so Swagger renders the generic
+  // `"string"` there. That is a `400`, which is the safe way to be wrong on a route that patches a
+  // key already in use.
+  it('is deliberately absent from the update route', () => {
+    expect(exampleOf(UpdateWebhookDto.prototype, 'secret')).toBeUndefined();
   });
 });
