@@ -68,3 +68,36 @@ describe('UpdateWebhookDto secret entropy', () => {
     expect(errors.some(e => e.property === 'secret')).toBe(true);
   });
 });
+
+/**
+ * The example Swagger renders is the body most readers send first, so the floor above has to hold for
+ * it too. It did not: the published example was 15 characters, and pasting it back through "Try it
+ * out" answered `400` naming a `minLength` the schema never declared, which reads as the API dropping
+ * the field rather than refusing it ([#1491](https://github.com/rmyndharis/OpenWA/issues/1491)).
+ *
+ * Read straight off the decorator rather than restating the value, so an example edited in the DTO is
+ * still the one under test.
+ */
+describe('the documented secret example', () => {
+  const exampleOf = (target: object, property: string): unknown =>
+    (Reflect.getMetadata('swagger/apiModelProperties', target, property) as { example?: unknown } | undefined)?.example;
+
+  it('is published on both routes', () => {
+    expect(typeof exampleOf(CreateWebhookDto.prototype, 'secret')).toBe('string');
+    expect(typeof exampleOf(UpdateWebhookDto.prototype, 'secret')).toBe('string');
+  });
+
+  it('passes the validation the create route applies to it', async () => {
+    const dto = new CreateWebhookDto();
+    dto.url = 'https://receiver.example.com/hook';
+    dto.events = ['message.received'];
+    dto.secret = exampleOf(CreateWebhookDto.prototype, 'secret') as string;
+    expect(await validate(dto)).toEqual([]);
+  });
+
+  it('passes the validation the update route applies to it', async () => {
+    const dto = new UpdateWebhookDto();
+    dto.secret = exampleOf(UpdateWebhookDto.prototype, 'secret') as string;
+    expect(await validate(dto)).toEqual([]);
+  });
+});

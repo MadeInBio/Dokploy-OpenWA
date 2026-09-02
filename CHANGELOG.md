@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   size, on both engines, instead of dropping the field and looking like a message that never had media.
 - Webhook filters and automation rules gated on `hasMedia` now match those messages.
 - Baileys logs a failed inbound media download at `warn` instead of `debug`, so it is visible by default.
+- The webhook `secret` example in Swagger and the API reference was shorter than the 16-character floor
+  the route enforces, so pasting it back answered `400`; it now passes, and the schema publishes the
+  length bounds ([#1491](https://github.com/rmyndharis/OpenWA/issues/1491)). Thanks @onepay-ye.
 
 ### Dependencies
 
