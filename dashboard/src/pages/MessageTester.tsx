@@ -837,7 +837,13 @@ export function MessageTester() {
                   <button type="button" className="browse-btn" onClick={() => bulkFileInputRef.current?.click()}>
                     <Upload size={14} /> {t('messageTester.bulkRecipientsUpload')}
                   </button>
-                  <input ref={bulkFileInputRef} type="file" accept=".txt,.csv" style={{ display: 'none' }} onChange={handleBulkFileChange} />
+                  <input
+                    ref={bulkFileInputRef}
+                    type="file"
+                    accept=".txt,.csv"
+                    style={{ display: 'none' }}
+                    onChange={handleBulkFileChange}
+                  />
                 </div>
                 <textarea
                   id="mt-11"
