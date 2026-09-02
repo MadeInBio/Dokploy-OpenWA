@@ -70,6 +70,10 @@ describe('StorageService (s3) client init', () => {
 
   afterEach(() => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
+    // The warning below is emitted from the constructor, so it can only be spied on the prototype.
+    // `restoreMocks` is not set for this project, so an assertion that throws before an inline
+    // restore would leave every later LoggerService in this file muted.
+    jest.restoreAllMocks();
   });
 
   // Build a ConfigService scoped to s3 storage; localPath points at the per-test tmp dir so the
@@ -127,7 +131,6 @@ describe('StorageService (s3) client init', () => {
     expect(svc.getCurrentStorageType()).toBe('s3');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('S3_ACCESS_KEY_ID'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('S3_SECRET_ACCESS_KEY'));
-    warn.mockRestore();
   });
 
   it('prefers canonical env names (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) over config', async () => {
