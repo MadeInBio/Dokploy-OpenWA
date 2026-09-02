@@ -650,6 +650,7 @@
     "forwardMessageId": "消息 ID",
     "forwardMessageIdHint": "要转发的消息 ID",
     "bulkRecipients": "接收者",
+    "bulkRecipientsUpload": "上传 CSV/TXT",
     "bulkRecipientsPlaceholder": "+62812345678",
     "bulkRecipientsHint": "每行一个电话号码或聊天 ID（最多 100 个）",
     "bulkRecipientsCount": "接收者：{{count}}",
@@ -680,8 +681,7 @@
       "progress": "已发送 {{sent}}/{{total}} · {{failed}} 失败 · {{pending}} 待发送",
       "cancel": "取消批次",
       "cancelling": "取消中..."
-    },
-    "bulkRecipientsUpload": "上传 CSV/TXT"
+    }
   },
   "infrastructure": {
     "title": "基础设施",

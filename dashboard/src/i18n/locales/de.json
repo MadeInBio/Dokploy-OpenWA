@@ -650,6 +650,7 @@
     "forwardMessageId": "Nachrichten-ID",
     "forwardMessageIdHint": "ID der weiterzuleitenden Nachricht",
     "bulkRecipients": "Empfänger",
+    "bulkRecipientsUpload": "CSV/TXT hochladen",
     "bulkRecipientsPlaceholder": "+491701234567",
     "bulkRecipientsHint": "Eine Telefonnummer oder Chat-ID pro Zeile (max. 100)",
     "bulkRecipientsCount": "Empfänger: {{count}}",
@@ -680,8 +681,7 @@
       "progress": "{{sent}} von {{total}} gesendet · {{failed}} fehlgeschlagen · {{pending}} ausstehend",
       "cancel": "Batch abbrechen",
       "cancelling": "Wird abgebrochen..."
-    },
-    "bulkRecipientsUpload": "CSV/TXT hochladen"
+    }
   },
   "infrastructure": {
     "title": "Infrastruktur",

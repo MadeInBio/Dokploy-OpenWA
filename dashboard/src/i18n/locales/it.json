@@ -650,6 +650,7 @@
     "forwardMessageId": "ID messaggio",
     "forwardMessageIdHint": "ID del messaggio da inoltrare",
     "bulkRecipients": "Destinatari",
+    "bulkRecipientsUpload": "Carica CSV/TXT",
     "bulkRecipientsPlaceholder": "+62812345678",
     "bulkRecipientsHint": "Un numero di telefono o ID chat per riga (max 100)",
     "bulkRecipientsCount": "Destinatari: {{count}}",
@@ -680,8 +681,7 @@
       "progress": "Inviati {{sent}} di {{total}} · {{failed}} non riusciti · {{pending}} in attesa",
       "cancel": "Annulla batch",
       "cancelling": "Annullamento..."
-    },
-    "bulkRecipientsUpload": "Carica CSV/TXT"
+    }
   },
   "infrastructure": {
     "title": "Infrastruttura",

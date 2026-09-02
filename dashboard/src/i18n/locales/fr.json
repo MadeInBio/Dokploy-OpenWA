@@ -650,6 +650,7 @@
     "forwardMessageId": "ID du message",
     "forwardMessageIdHint": "ID du message à transférer",
     "bulkRecipients": "Destinataires",
+    "bulkRecipientsUpload": "Téléverser CSV/TXT",
     "bulkRecipientsPlaceholder": "+62812345678",
     "bulkRecipientsHint": "Un numéro de téléphone ou ID de chat par ligne (max 100)",
     "bulkRecipientsCount": "Destinataires : {{count}}",
@@ -680,8 +681,7 @@
       "progress": "Envoyés {{sent}} sur {{total}} · {{failed}} échoués · {{pending}} en attente",
       "cancel": "Annuler le lot",
       "cancelling": "Annulation..."
-    },
-    "bulkRecipientsUpload": "Télécharger CSV/TXT"
+    }
   },
   "infrastructure": {
     "title": "Infrastructure",

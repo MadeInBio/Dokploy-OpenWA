@@ -650,6 +650,7 @@
     "forwardMessageId": "సందేశ ID",
     "forwardMessageIdHint": "ఫార్వార్డ్ చేయాల్సిన సందేశం యొక్క ID",
     "bulkRecipients": "గ్రహీతలు",
+    "bulkRecipientsUpload": "CSV/TXT అప్‌లోడ్ చేయండి",
     "bulkRecipientsPlaceholder": "+62812345678",
     "bulkRecipientsHint": "ఒక్కో లైన్‌లో ఒక ఫోన్ నంబర్ లేదా చాట్ ID (గరిష్టంగా 100)",
     "bulkRecipientsCount": "గ్రహీతలు: {{count}}",
@@ -680,8 +681,7 @@
       "progress": "{{total}}లో {{sent}} పంపబడ్డాయి · {{failed}} విఫలమయ్యాయి · {{pending}} పెండింగ్‌లో ఉన్నాయి",
       "cancel": "బ్యాచ్‌ను రద్దు చేయండి",
       "cancelling": "రద్దు చేస్తోంది..."
-    },
-    "bulkRecipientsUpload": "CSV/TXT అప్‌లోడ్ చేయండి"
+    }
   },
   "infrastructure": {
     "title": "ఇన్‌ఫ్రాస్ట్రక్చర్",

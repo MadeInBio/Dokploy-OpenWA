@@ -650,6 +650,7 @@
     "forwardMessageId": "메시지 ID",
     "forwardMessageIdHint": "전달할 메시지의 ID",
     "bulkRecipients": "수신자",
+    "bulkRecipientsUpload": "CSV/TXT 업로드",
     "bulkRecipientsPlaceholder": "+62812345678",
     "bulkRecipientsHint": "한 줄에 하나의 전화번호 또는 채팅 ID (최대 100개)",
     "bulkRecipientsCount": "수신자: {{count}}",
@@ -680,8 +681,7 @@
       "progress": "{{total}}개 중 {{sent}}개 전송됨 · {{failed}}개 실패 · {{pending}}개 대기 중",
       "cancel": "배치 취소",
       "cancelling": "취소 중..."
-    },
-    "bulkRecipientsUpload": "CSV/TXT 업로드"
+    }
   },
   "infrastructure": {
     "title": "인프라",

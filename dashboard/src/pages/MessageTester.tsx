@@ -103,6 +103,7 @@ export function MessageTester() {
   // exclusive with mediaUrl: picking a file clears the URL field; typing a URL drops the file.
   const [mediaFile, setMediaFile] = useState<{ base64: string; mimetype: string; filename: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bulkFileInputRef = useRef<HTMLInputElement>(null);
   // Monotonic token invalidating an in-flight FileReader: a second pick, a URL edit, a removal,
   // or an unmount before `onload` fires must win over the late-arriving bytes — otherwise the
   // slower read overwrites the newer state (and re-clears a URL the user just typed).
@@ -195,25 +196,13 @@ export function MessageTester() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = ev => {
-      const text = ev.target?.result as string;
-      if (!text) return;
-
-      const extracted = text
-        .split(/[\r\n,]+/)
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-
-      if (extracted.length === 0) return;
-
-      setBulkRecipients(prev => {
-        const prevList = prev
-          .split('\n')
-          .map(l => l.trim())
-          .filter(l => l.length > 0);
-        const combined = Array.from(new Set([...prevList, ...extracted]));
-        return combined.join('\n');
-      });
+    reader.onload = () => {
+      const text = reader.result;
+      if (typeof text !== 'string' || !text.trim()) return;
+      setBulkRecipients(prev => (prev.trim() ? `${prev.trimEnd()}\n` : '') + text.trim());
+    };
+    reader.onerror = () => {
+      setResponse({ success: false, timestamp: new Date().toISOString(), error: t('messageTester.fileReadError') });
     };
     reader.readAsText(file);
   };
@@ -839,33 +828,16 @@ export function MessageTester() {
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    marginBottom: '8px',
+                    marginBottom: '0.5rem',
                   }}
                 >
                   <label htmlFor="mt-11" style={{ marginBottom: 0 }}>
                     {t('messageTester.bulkRecipients')}
                   </label>
-                  <label
-                    className="upload-btn"
-                    style={{
-                      margin: 0,
-                      padding: '4px 8px',
-                      fontSize: '0.85rem',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      backgroundColor: 'var(--bg-secondary)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '4px',
-                      textTransform: 'none',
-                      fontWeight: 500,
-                      letterSpacing: 'normal',
-                    }}
-                  >
-                    <Upload size={14} style={{ marginRight: '6px' }} />
-                    {t('messageTester.bulkRecipientsUpload')}
-                    <input type="file" accept=".txt,.csv" onChange={handleBulkFileChange} style={{ display: 'none' }} />
-                  </label>
+                  <button type="button" className="browse-btn" onClick={() => bulkFileInputRef.current?.click()}>
+                    <Upload size={14} /> {t('messageTester.bulkRecipientsUpload')}
+                  </button>
+                  <input ref={bulkFileInputRef} type="file" accept=".txt,.csv" style={{ display: 'none' }} onChange={handleBulkFileChange} />
                 </div>
                 <textarea
                   id="mt-11"
