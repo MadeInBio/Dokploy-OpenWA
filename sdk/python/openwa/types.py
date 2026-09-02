@@ -850,6 +850,8 @@ class WebhookFilters(TypedDict):
 class CreateWebhookRequest(TypedDict):
     url: str
     events: NotRequired[list[WebhookEvent]]
+    # HMAC secret, signed as ``X-OpenWA-Signature: sha256=<hex>``. At least 16 characters; the
+    # gateway answers 400 below that. Omit for unsigned deliveries. Never returned by a read.
     secret: NotRequired[str]
     headers: NotRequired[dict[str, str]]
     filters: NotRequired[WebhookFilters | None]
@@ -863,6 +865,8 @@ class UpdateWebhookRequest(TypedDict, total=False):
     # optional. Every field here is a partial update.
     url: str
     events: list[WebhookEvent]
+    # Same 16-character minimum as the create request, with one exception: the empty string is the
+    # documented "clear the secret" value and is accepted.
     secret: str
     headers: dict[str, str]
     filters: WebhookFilters | None
