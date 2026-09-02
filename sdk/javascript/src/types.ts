@@ -912,7 +912,10 @@ export interface WebhookFilters {
 export interface CreateWebhookRequest {
   url: string;
   events?: WebhookEvent[];
-  /** HMAC secret; signed as `X-OpenWA-Signature: sha256=…`. */
+  /**
+   * HMAC secret; signed as `X-OpenWA-Signature: sha256=…`. At least 16 characters, or the gateway
+   * answers 400. Omit for unsigned deliveries. Never returned by a read.
+   */
   secret?: string;
   headers?: Record<string, string>;
   filters?: WebhookFilters | null;
@@ -920,6 +923,10 @@ export interface CreateWebhookRequest {
   retryCount?: number;
 }
 
+/**
+ * Every field is a partial update. `secret: ''` and `headers: {}` are the documented "clear it"
+ * values; any other secret is still held to the 16-character minimum.
+ */
 export type UpdateWebhookRequest = Partial<CreateWebhookRequest> & { active?: boolean };
 
 export interface WebhookResponse {

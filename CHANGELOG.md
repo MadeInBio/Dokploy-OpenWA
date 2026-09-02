@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slow command as a transport death.
 - `GET /sessions/{sessionId}/contacts` declares `503` in the contract and answers it when the
   whatsapp-web.js page dies mid-read, instead of a bare `500`. Thanks @Deyvis17GY.
+- All five clients now document the 16-character minimum on a webhook `secret`, and that an empty
+  string clears it on update. The constraint is unchanged; until now only the gateway named it, in a
+  `400`.
 
 ### Fixed
 
