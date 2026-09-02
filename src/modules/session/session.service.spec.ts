@@ -735,7 +735,7 @@ describe('SessionService', () => {
       const result = await service.findAll();
 
       expect(result).toHaveLength(2);
-      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+      expect(repository.find).toHaveBeenCalledWith({ order: { createdAt: 'DESC', id: 'DESC' }, take: 1000, skip: 0 });
     });
 
     it('scopes results to a session-restricted key', async () => {
@@ -745,7 +745,7 @@ describe('SessionService', () => {
 
       expect(repository.find).toHaveBeenCalledWith({
         where: { id: In(['sess-1', 'sess-2']) },
-        order: { createdAt: 'DESC' },
+        order: { createdAt: 'DESC', id: 'DESC' },
         take: 1000,
         skip: 0,
       });
@@ -758,8 +758,16 @@ describe('SessionService', () => {
       await service.findAll([]);
 
       expect(repository.find).toHaveBeenCalledTimes(2);
-      expect(repository.find).toHaveBeenNthCalledWith(1, { order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
-      expect(repository.find).toHaveBeenNthCalledWith(2, { order: { createdAt: 'DESC' }, take: 1000, skip: 0 });
+      expect(repository.find).toHaveBeenNthCalledWith(1, {
+        order: { createdAt: 'DESC', id: 'DESC' },
+        take: 1000,
+        skip: 0,
+      });
+      expect(repository.find).toHaveBeenNthCalledWith(2, {
+        order: { createdAt: 'DESC', id: 'DESC' },
+        take: 1000,
+        skip: 0,
+      });
     });
 
     it('applies bounded pagination to the database query', async () => {
@@ -769,7 +777,7 @@ describe('SessionService', () => {
 
       expect(repository.find).toHaveBeenCalledWith({
         where: { id: In(['sess-1']) },
-        order: { createdAt: 'DESC' },
+        order: { createdAt: 'DESC', id: 'DESC' },
         take: 1000,
         skip: 0,
       });

@@ -215,16 +215,17 @@ jobs:
           DATABASE_NAME: openwa
 
       # Runtime-proves BuiltInFtsProvider on Postgres (websearch_to_tsquery + ts_headline against the
-      # STORED body_ts tsvector) and the boot-migration advisory lock (two concurrent migrators on
-      # one database). Both specs self-skip unless DATABASE_TYPE=postgres, so they are a no-op
-      # in the default test job and only execute here against the postgres:16 service.
-      - name: Postgres specs (FTS provider + boot-migration lock)
+      # STORED body_ts tsvector), the boot-migration advisory lock (two concurrent migrators on one
+      # database), and that a paged message list has a total order. All three self-skip unless
+      # DATABASE_TYPE=postgres, so they are a no-op in the default test job and only execute here
+      # against the postgres:16 service.
+      - name: Postgres specs (FTS provider + boot-migration lock + list ordering)
         # --runInBand: same reason the CI job passes it — both specs issue DDL against the one
         # shared service database, and jest's default file-parallelism races their catalog writes
         # (the first v0.19.0 tag failed this step on `relation "messages" already exists` over a
         # tree CI had passed minutes earlier). The lock spec's own two-migrator race is in-file
         # (Promise.all) and unaffected by runInBand.
-        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts
+        run: npx jest --runInBand src/database/migrations/__tests__/1782400000000-AddMessagesFts.pg.spec.ts src/database/migrations/__tests__/pg-boot-migrations.pg.spec.ts src/modules/message/message-list-ordering.pg.spec.ts
         env:
           DATABASE_TYPE: postgres
           DATABASE_HOST: localhost
