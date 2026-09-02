@@ -133,6 +133,20 @@ describe('StorageService (s3) client init', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('S3_SECRET_ACCESS_KEY'));
   });
 
+  it('names only the half of the credential pair that is missing', async () => {
+    // Reaching the fallback with one of the pair set is a typo in the other. A warning that called
+    // every credential absent would point the operator at the one they got right.
+    process.env.S3_ACCESS_KEY_ID = 'ENVKEY';
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+    new StorageService(makeConfig({ region: 'us-east-1' }));
+    await flush();
+
+    expect(mockedS3Client).not.toHaveBeenCalled();
+    const message = String(warn.mock.calls.at(-1)?.[0]);
+    expect(message).toContain('S3_SECRET_ACCESS_KEY');
+    expect(message).not.toContain('S3_ACCESS_KEY_ID');
+  });
+
   it('prefers canonical env names (S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY) over config', async () => {
     process.env.S3_ACCESS_KEY_ID = 'ENVKEY';
     process.env.S3_SECRET_ACCESS_KEY = 'ENVSECRET';
