@@ -10287,12 +10287,13 @@
           },
           "proxyType": {
             "type": "string",
-            "description": "Proxy protocol derived from the stored URL scheme",
+            "description": "Proxy protocol derived from the stored URL scheme; `null` when no proxy is set",
             "enum": [
               "http",
               "https",
               "socks4",
-              "socks5"
+              "socks5",
+              null
             ],
             "nullable": true,
             "example": "http"
