@@ -28,7 +28,7 @@ interface ChatThreadProps {
   hasMoreMessages: boolean;
   loadingOlderMessages: boolean;
   onLoadOlderMessages: () => void;
-  onMediaLoad: () => void;
+  onMediaLoad: (event?: { currentTarget: Element | null }) => void;
   onOpenImage: (messageId: string) => void;
   onReply: (message: ChatMessageView) => void;
   onReact: (message: ChatMessageView, emoji: string) => void;

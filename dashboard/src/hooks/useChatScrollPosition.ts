@@ -56,9 +56,11 @@ export function decideRestoreTarget(
  *   releases as soon as the USER scrolls away from the bottom (and re-arms when
  *   they scroll back), so late-decoding media never yanks a reading user.
  * - Reading further back: the same late-decode growth, above a viewport that is
- *   NOT pinned to the bottom, holds the user's position instead of re-pinning —
- *   `onMediaLoad`'s third branch, since a decode there has no requesting call to
- *   snapshot a "before" height from the way `onOlderMessagesRequested` does.
+ *   NOT pinned to the bottom, holds the user's position instead of re-pinning.
+ *   That is `onMediaLoad`'s third branch. It snapshots the height at the load
+ *   event, since a decode has no requesting call to hang one on the way
+ *   `onOlderMessagesRequested` does, and it corrects only for media sitting
+ *   above the reading position: growth below it moves nothing on screen.
  *
  * Mount the returned `containerRef` on the scroll container (the `.room-messages`
  * div in Chats.tsx). The Map of saved positions lives in a ref so it doesn't
@@ -73,6 +75,22 @@ export function isNearBottom(scrollTop: number, scrollHeight: number, clientHeig
   return scrollHeight - scrollTop - clientHeight <= BOTTOM_PIN_THRESHOLD_PX;
 }
 
+/**
+ * Whether media that just finished loading sits above the reading position, taking both edges in
+ * viewport coordinates. This is the one distinction native scroll anchoring made, and the reason
+ * the correction cannot be a bare `scrollHeight` delta: growth BELOW the fold moves nothing on
+ * screen, so adding it to `scrollTop` would drag the reader toward the newest messages instead of
+ * holding them still. The thread is not virtualized, so every image between the reader and the
+ * bottom fires one of these.
+ *
+ * Media straddling the top edge answers false. Only the part above the edge displaces anything, so
+ * a full correction would overshoot, and leaving it uncorrected errs in the direction the reader
+ * was already travelling rather than against it.
+ */
+export function grewAboveReadingPosition(mediaBottom: number, containerTop: number): boolean {
+  return mediaBottom <= containerTop;
+}
+
 export function useChatScrollPosition(
   activeChatId: string | null,
   isLoaded: boolean,
@@ -80,7 +98,8 @@ export function useChatScrollPosition(
 ): {
   containerRef: RefObject<HTMLDivElement | null>;
   onMessageAppended: (direction: ScrollDirection) => void;
-  onMediaLoad: () => void;
+  /** Pass the load event through: which element grew decides whether the reader moved at all. */
+  onMediaLoad: (event?: { currentTarget: Element | null }) => void;
   /** Call when an older page is requested; the reading position is held once it lands. */
   onOlderMessagesRequested: () => void;
 } {
@@ -99,9 +118,6 @@ export function useChatScrollPosition(
   const prevScrollHeightRef = useRef<number>(0);
   const awaitingOlderPageRef = useRef<boolean>(false);
   const wasFetchingOlderRef = useRef<boolean>(false);
-  // The container's height as of the last commit this hook has accounted for — see the "always
-  // sync" layout effect and onMediaLoad's unpinned branch below.
-  const lastCommittedHeightRef = useRef<number>(0);
 
   const writeScrollTop = useCallback((el: HTMLDivElement, top: number) => {
     const before = el.scrollTop;
@@ -207,15 +223,6 @@ export function useChatScrollPosition(
     }
   });
 
-  // Keeps lastCommittedHeightRef in sync with every commit's actual height, so onMediaLoad's
-  // unpinned branch below always has a same-commit baseline to diff a decode's growth against —
-  // no dep array, same reasoning as the scroll-listener effect above: it must run every render to
-  // stay current, not just when some particular prop happens to change.
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (el) lastCommittedHeightRef.current = el.scrollHeight;
-  });
-
   const onOlderMessagesRequested = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -249,36 +256,54 @@ export function useChatScrollPosition(
   // Reading further back through media-heavy history is the third case: not pinned, nothing
   // pending. A decode above the viewport still grows the thread with no reserved box (there is no
   // width/height in the media metadata to size one from up front), pushing what the user is
-  // reading down exactly like an unabsorbed older-page prepend — held the same way, against the
-  // last height this hook has seen rather than a snapshot taken at some fixed "request" moment,
-  // since there is no equivalent request event for a decode to hang one on.
-  const onMediaLoad = useCallback(() => {
-    const pending = pendingRestoreRef.current;
-    if (pending !== null) {
+  // reading down exactly like an unabsorbed older-page prepend, and it is held the same way. The
+  // decode has no request event to hang a snapshot on, so the baseline is taken here, from the
+  // load event itself, and the element that fired it says whether the reader moved at all.
+  const onMediaLoad = useCallback(
+    (event?: { currentTarget: Element | null }) => {
+      const pending = pendingRestoreRef.current;
+      if (pending !== null) {
+        requestAnimationFrame(() => {
+          const cur = containerRef.current;
+          if (cur && pendingRestoreRef.current !== null) writeScrollTop(cur, pending);
+        });
+        return;
+      }
+      if (pinnedRef.current) {
+        requestAnimationFrame(() => {
+          const cur = containerRef.current;
+          if (cur && pinnedRef.current) pinToBottom(cur);
+        });
+        return;
+      }
+      const el = containerRef.current;
+      if (!el) return;
+      // An older page in flight already owns this growth: the landing effect diffs against a
+      // request-time snapshot that spans every commit until the page lands, decodes included.
+      // Correcting here as well would count the same pixels twice and overshoot by the decode.
+      if (awaitingOlderPageRef.current) return;
+      // Which element grew decides whether the reader moved at all; see grewAboveReadingPosition.
+      const media = event?.currentTarget ?? null;
+      if (!media) return;
+      if (!grewAboveReadingPosition(media.getBoundingClientRect().bottom, el.getBoundingClientRect().top)) {
+        return;
+      }
+      // Snapshot locally rather than from a ref any other commit can refresh: a render landing
+      // between this event and the frame below would otherwise consume the pending correction and
+      // leave the reader displaced with nothing to catch it.
+      const before = el.scrollHeight;
       requestAnimationFrame(() => {
         const cur = containerRef.current;
-        if (cur && pendingRestoreRef.current !== null) writeScrollTop(cur, pending);
+        if (!cur) return;
+        const grew = cur.scrollHeight - before;
+        if (grew <= 0) return;
+        const corrected = cur.scrollTop + grew;
+        writeScrollTop(cur, corrected);
+        if (activeChatId !== null) scrollMap.current.set(activeChatId, corrected);
       });
-      return;
-    }
-    if (pinnedRef.current) {
-      requestAnimationFrame(() => {
-        const cur = containerRef.current;
-        if (cur && pinnedRef.current) pinToBottom(cur);
-      });
-      return;
-    }
-    requestAnimationFrame(() => {
-      const cur = containerRef.current;
-      if (!cur) return;
-      const grew = cur.scrollHeight - lastCommittedHeightRef.current;
-      if (grew <= 0) return;
-      const corrected = cur.scrollTop + grew;
-      writeScrollTop(cur, corrected);
-      lastCommittedHeightRef.current = cur.scrollHeight;
-      if (activeChatId !== null) scrollMap.current.set(activeChatId, corrected);
-    });
-  }, [activeChatId, pinToBottom, writeScrollTop]);
+    },
+    [activeChatId, pinToBottom, writeScrollTop],
+  );
 
   return { containerRef, onMessageAppended, onMediaLoad, onOlderMessagesRequested };
 }
