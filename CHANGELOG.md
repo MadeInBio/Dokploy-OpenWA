@@ -92,6 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `browserslist` 4.28.2 to 4.28.8 in both dependency trees, closing two high-severity advisories
   (unbounded cache growth, and a crash on untrusted custom stats). Dev-only and transitive in each,
   so nothing that ships changes.
+- `fast-uri` 3.1.5 to 3.1.7 via an override, closing four high-severity advisories: two host-confusion
+  paths (skipped IDN canonicalisation, percent-encoded scheme normalisation) and two SSRF paths
+  (malformed IPv6 normalisation, repeated hostname percent-decoding). It arrives under `ajv`, whose
+  range already allows the patched version, and reaches the runtime tree through
+  `@modelcontextprotocol/sdk`, so this one does ship.
 
 ## [0.23.3] - 2026-08-24
 
