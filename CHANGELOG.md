@@ -86,6 +86,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lookup, addressbook save and delete, and block and unblock. The list and single-contact reads in the
   same file already made that split ([#1476](https://github.com/rmyndharis/OpenWA/issues/1476)).
   Thanks @onepay-ye.
+- Fifteen more whatsapp-web.js operations answer `503` rather than `500` when the browser page dies
+  mid-request: the group list and membership queue, the four label reads and writes, and nine message
+  operations (history, reactions, react, edit, delete, star, pin, unpin and poll votes). Twelve of them
+  had no error handling on that path at all, so a dead page was also never reported to the liveness
+  check. Ten of these routes now declare `503` in the API contract; the message send routes keep
+  answering `500` deliberately, because `503` is replay-safe in the SDK clients and a replayed send
+  would duplicate the message.
 
 ### Dependencies
 
