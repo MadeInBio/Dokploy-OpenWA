@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already fetched, not by the length of the rendered thread, which also carries engine-history
   items, so no row is skipped between pages; and the reading position is held when a page is
   prepended rather than jumping. Thanks @JuanGalzerano.
+- Webhook smart filters and automation rules can match on chat `kind` (`individual`, `group`,
+  `channel`, `status`, `broadcast`, `unknown`), so a subscription can exclude channel (newsletter)
+  traffic that the `isGroup` boolean could not separate from a 1:1 chat
+  ([#1500](https://github.com/rmyndharis/OpenWA/issues/1500)).
 
 ### Changed
 
@@ -153,6 +157,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   having run nothing and the jobs behind them reported a pass. Thanks @JuanGalzerano for the report.
 - docs/29 names the Baileys build the tree installs; the counts spec now binds both engine library
   versions to the pins.
+- An unusable `sharp` no longer fails the whole gateway at boot. It backs one Baileys route, sticker
+  conversion, but was imported at the top of a module the built-in engine loads on both engines, so a
+  native binary that could not build or load on an older CPU took the entire process down. It is now
+  loaded lazily and only that one route degrades, with a clear error
+  ([#1459](https://github.com/rmyndharis/OpenWA/issues/1459)).
 
 ### Dependencies
 
