@@ -114,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Target closed` tore its session down, emitted `session.disconnected` to every consumer, paused
   inbound delivery for the reconnect, and answered `503` instead of `404`. Errors the gateway
   constructs are now excluded outright.
-- The three whatsapp-web.js status posts and the channel create no longer answer `503` when the
+- The four whatsapp-web.js status posts, the channel create and the call-link create no longer answer `503` when the
   browser page dies. The library can throw after the request is already on the wire, and `503` is
   the status the clients replay for a POST, so a retry could publish the status twice. They answer
   the same opaque `500` the message sends do. `DELETE` on a status keeps `503`, which is safe to
