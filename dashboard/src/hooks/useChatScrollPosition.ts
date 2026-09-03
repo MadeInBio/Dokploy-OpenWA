@@ -295,6 +295,10 @@ export function useChatScrollPosition(
       requestAnimationFrame(() => {
         const cur = containerRef.current;
         if (!cur) return;
+        // The container is reused across chats, so a switch between the event and this frame would
+        // measure the new thread and save the result under the old chat's id. prevChatIdRef holds
+        // whichever chat is actually on screen, set by the restore effect above.
+        if (prevChatIdRef.current !== activeChatId) return;
         const grew = cur.scrollHeight - before;
         if (grew <= 0) return;
         const corrected = cur.scrollTop + grew;
