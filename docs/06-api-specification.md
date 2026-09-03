@@ -2358,7 +2358,7 @@ Get a single contact by its WhatsApp id.
 }
 ```
 
-**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Contact <id> not found` (engine returned null) · `409` conflict or engine not ready (retryable)
+**Errors:** `400` session is not started · `401` missing/invalid API key · `404` `Contact <id> not found` (engine returned null) · `409` conflict or engine not ready (retryable) · `503` the whatsapp-web.js page died mid-read, so the lookup reached no answer (distinct from the `404`, which asserts the contact does not exist)
 
 #### GET /api/sessions/:sessionId/contacts/:contactId/profile-picture
 
