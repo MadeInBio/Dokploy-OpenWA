@@ -148,7 +148,10 @@ function scheduleReplayOnSettle(queryClient: QueryClient, key: MessagesQueryKey)
       writesLostToFetch.delete(id);
       return;
     }
-    if (event.query.state.fetchStatus === 'fetching') return;
+    // Settled means `idle`, not merely "not fetching". A fetch the browser pauses when it goes
+    // offline reports `paused` and resumes later, so treating that as a settle would drain the
+    // queue, unsubscribe, and leave the resumed page free to overwrite those writes for good.
+    if (event.query.state.fetchStatus !== 'idle') return;
     settleSubscriptions.delete(id);
     unsubscribe();
     replayWritesLostToFetch(queryClient, key);
@@ -172,7 +175,10 @@ function writeMessagesCache(
   const state = queryClient.getQueryState<MessagesData>(key);
   if (state?.data === undefined) return;
   queryClient.setQueryData<MessagesData>(key, old => (old === undefined ? undefined : apply(old)));
-  if (state.fetchStatus !== 'fetching') return;
+  // Anything but `idle` still has a page coming that will overwrite this write when it lands, so
+  // it has to be queued. `paused` is the case a bare `=== 'fetching'` test misses: the browser
+  // parks the fetch when it goes offline and resumes it later.
+  if (state.fetchStatus === 'idle') return;
   const id = pendingKey(key);
   const queued = writesLostToFetch.get(id) ?? [];
   const wrote = queryClient.getQueryData<MessagesData>(key);
