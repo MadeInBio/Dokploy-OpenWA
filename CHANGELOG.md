@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#1474](https://github.com/rmyndharis/OpenWA/issues/1474)). Thanks @vitusan.
 - Sessions dashboard: set a proxy when creating a session, and view, change or clear it afterwards.
   Thanks @vitusan.
+- The dashboard chat room loads older history as you scroll up. It used to show one fixed window —
+  the newest 100 persisted rows plus up to 100 rows of engine history merged in, so roughly 200
+  messages — with no way to reach anything older. Pages are requested by the number of DB rows
+  already fetched, not by the length of the rendered thread, which also carries engine-history
+  items, so no row is skipped between pages; and the reading position is held when a page is
+  prepended rather than jumping. Thanks @JuanGalzerano.
 
 ### Changed
 
