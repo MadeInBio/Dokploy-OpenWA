@@ -218,6 +218,8 @@ export interface MessageResponse {
 
 // Mirrors the backend engine ChatKind (dashboard cannot import wa-id.ts).
 export type ChatKind = 'individual' | 'group' | 'channel' | 'status' | 'broadcast' | 'unknown';
+// Mirrors CHAT_KINDS in the backend webhook filter registry (src/modules/webhook/filters/filter-types.ts).
+export const CHAT_KINDS: readonly ChatKind[] = ['individual', 'group', 'channel', 'status', 'broadcast', 'unknown'];
 
 // Chat summary returned by GET /sessions/:id/chats (mirrors the backend ChatSummary).
 export interface Chat {
