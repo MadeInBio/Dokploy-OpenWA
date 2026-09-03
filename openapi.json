@@ -2327,6 +2327,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "`after` names no message in this session. The keyset comparison would otherwise return an empty page, which reads exactly like the end of the history, so a walk resumed from a stale or foreign cursor would stop silently instead of reporting the cursor."
           }
         },
         "summary": "Get message history for a session",
