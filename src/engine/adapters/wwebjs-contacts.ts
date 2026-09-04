@@ -3,7 +3,10 @@ import { Contact } from '../interfaces/whatsapp-engine.interface';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { userPart } from '../identity/wa-id';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
-import { type WwebjsEngineHost } from './wwebjs-host';
+import { type WwebjsEngineHost, withPage } from './wwebjs-host';
+
+/** The raw whatsapp-web.js contact element type, kept local so the wwebjs `Contact` type never leaks. */
+type RawWwebjsContact = Awaited<ReturnType<Client['getContacts']>>[number];
 
 /**
  * Contact operations extracted from WhatsAppWebJsAdapter. The adapter keeps the public methods as
@@ -18,37 +21,65 @@ export class WwebjsContacts {
     return this.host.getClient();
   }
 
+  /**
+   * Map a raw whatsapp-web.js contact to the library-agnostic {@link Contact}. The id is read
+   * through {@link readWid} so both the `_serialized` and post-rename `$1` shapes resolve; a
+   * contact with no readable id returns null so callers can skip it instead of dereferencing
+   * unguarded (the shape that lets a single bad entry reject the whole request).
+   */
+  private toContact(c: RawWwebjsContact): Contact | null {
+    const id = readWid(c.id);
+    if (!id) return null;
+    return {
+      id,
+      name: c.name || undefined,
+      pushName: c.pushname || undefined,
+      number: c.number,
+      isMyContact: c.isMyContact,
+      isBlocked: c.isBlocked,
+    };
+  }
+
   async getContacts(): Promise<Contact[]> {
     this.host.ensureReady();
-    try {
-      const contacts = await this.client().getContacts();
 
-      return contacts.map(c => ({
-        id: c.id._serialized,
-        name: c.name || undefined,
-        pushName: c.pushname || undefined,
-        number: c.number,
-        isMyContact: c.isMyContact,
-        isBlocked: c.isBlocked,
-      }));
+    let raw: RawWwebjsContact[];
+    try {
+      raw = await this.client().getContacts();
     } catch (error) {
-      this.host.reportIfPageTransportError(error, 'getContacts');
+      // A dead page surfaces here as a raw Puppeteer error; convert it to the documented transport
+      // failure the way wwebjs-chats.ts does, so a transport death answers 503 instead of a bare 500.
+      if (this.host.isPageTransportError(error)) {
+        this.host.reportIfPageTransportError(error, 'getContacts');
+        throw new EngineTransportError('Transport died while reading contacts');
+      }
       throw error;
     }
+
+    // Read every id through readWid (so the `_serialized`->`$1` rename lands here too) and skip
+    // entries with no readable id, counted and logged like the chats path, rather than dropping
+    // the whole address book silently.
+    const contacts: Contact[] = [];
+    let skipped = 0;
+    for (const c of raw) {
+      const mapped = this.toContact(c);
+      if (!mapped) {
+        skipped++;
+        continue;
+      }
+      contacts.push(mapped);
+    }
+    if (skipped > 0) {
+      this.host.logger.warn(`Skipped ${skipped} contact(s) without a serialized id`);
+    }
+    return contacts;
   }
 
   async getContactById(contactId: string): Promise<Contact | null> {
     this.host.ensureReady();
     try {
       const contact = await this.client().getContactById(contactId);
-      return {
-        id: contact.id._serialized,
-        name: contact.name || undefined,
-        pushName: contact.pushname || undefined,
-        number: contact.number,
-        isMyContact: contact.isMyContact,
-        isBlocked: contact.isBlocked,
-      };
+      return this.toContact(contact);
     } catch (error) {
       // Unlike the avatar lookup, a throw here can legitimately mean the contact is absent:
       // `window.WWebJS.getContact` has no try/catch and reads `contact.isBusiness` straight off
@@ -66,15 +97,10 @@ export class WwebjsContacts {
 
   async getNumberId(number: string): Promise<string | null> {
     this.host.ensureReady();
-    try {
-      const numberId = await this.client().getNumberId(number);
-      // Read both property names: a WA Web build that renamed `_serialized` would otherwise make
-      // every number look unregistered — and checkNumberExists below reports exactly that.
-      return readWid(numberId) ?? null;
-    } catch (error) {
-      this.host.reportIfPageTransportError(error, 'getNumberId');
-      throw error;
-    }
+    const numberId = await withPage(this.host, 'getNumberId', () => this.client().getNumberId(number));
+    // Read both property names: a WA Web build that renamed `_serialized` would otherwise make
+    // every number look unregistered — and checkNumberExists below reports exactly that.
+    return readWid(numberId) ?? null;
   }
 
   async checkNumberExists(number: string): Promise<boolean> {
@@ -102,20 +128,24 @@ export class WwebjsContacts {
     // undefined, which would land in the page-side payload as the literal string "undefined".
     // syncToAddressbook is left at its default (false): writing to the device addressbook is a
     // heavier, separately-consented action than saving the WhatsApp contact.
-    await this.client().saveOrEditAddressbookContact(userPart(contactId), firstName, lastName);
+    await withPage(this.host, 'upsertContact', () =>
+      this.client().saveOrEditAddressbookContact(userPart(contactId), firstName, lastName),
+    );
     this.host.logger.log(`Saved addressbook contact ${contactId}`);
   }
 
   async deleteContact(contactId: string): Promise<void> {
     this.host.ensureReady();
-    await this.client().deleteAddressbookContact(userPart(contactId));
+    await withPage(this.host, 'deleteContact', () => this.client().deleteAddressbookContact(userPart(contactId)));
     this.host.logger.log(`Deleted addressbook contact ${contactId}`);
   }
 
   async blockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
-    const contact = await this.client().getContactById(contactId);
-    await contact.block();
+    await withPage(this.host, 'blockContact', async () => {
+      const contact = await this.client().getContactById(contactId);
+      await contact.block();
+    });
     this.host.logger.log(`Blocked contact ${contactId}`);
   }
 
@@ -126,19 +156,16 @@ export class WwebjsContacts {
    */
   async getBlockedContacts(): Promise<string[]> {
     this.host.ensureReady();
-    try {
-      const contacts = await this.client().getBlockedContacts();
-      return contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
-    } catch (error) {
-      this.host.reportIfPageTransportError(error, 'getBlockedContacts');
-      throw error;
-    }
+    const contacts = await withPage(this.host, 'getBlockedContacts', () => this.client().getBlockedContacts());
+    return contacts.map(c => readWid(c.id as unknown as SerializedWid)).filter((id): id is string => Boolean(id));
   }
 
   async unblockContact(contactId: string): Promise<void> {
     this.host.ensureReady();
-    const contact = await this.client().getContactById(contactId);
-    await contact.unblock();
+    await withPage(this.host, 'unblockContact', async () => {
+      const contact = await this.client().getContactById(contactId);
+      await contact.unblock();
+    });
     this.host.logger.log(`Unblocked contact ${contactId}`);
   }
 
