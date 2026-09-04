@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existed; the chat list never reported the resulting state back, so a consumer had no way to
   filter archived chats out of its own view, order pinned chats first, or honour a mute — and
   whatsapp-web.js's `chat_archived` event is deliberately not wired, so there was no event
-  fallback either.
+  fallback either. `GET /sessions/{sessionId}/labels/{labelId}/chats` returns the same chat
+  summary, so it reports the three fields as well.
 
 ### Changed
 

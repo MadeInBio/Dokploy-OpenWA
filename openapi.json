@@ -6479,7 +6479,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/LabelChatDto"
+                    "$ref": "#/components/schemas/ChatSummaryDto"
                   }
                 }
               }
@@ -14969,54 +14969,6 @@
           "id",
           "name",
           "hexColor"
-        ]
-      },
-      "LabelChatDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Chat id in the engine's native format.",
-            "example": "628123456789@c.us"
-          },
-          "name": {
-            "type": "string",
-            "description": "Chat title — contact name or group subject.",
-            "example": "Ada Lovelace"
-          },
-          "isGroup": {
-            "type": "boolean",
-            "description": "Retained for back-compat; `kind` is the full discriminator.",
-            "example": false
-          },
-          "kind": {
-            "type": "string",
-            "description": "User-facing chat kind.",
-            "example": "individual"
-          },
-          "unreadCount": {
-            "type": "number",
-            "description": "Unread messages in this chat.",
-            "example": 0
-          },
-          "timestamp": {
-            "type": "number",
-            "description": "Unix SECONDS of the most recent activity.",
-            "example": 1786000000
-          },
-          "lastMessage": {
-            "type": "string",
-            "description": "Preview of the last message, when there is one.",
-            "example": "See you then"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "isGroup",
-          "kind",
-          "unreadCount",
-          "timestamp"
         ]
       },
       "UpsertLabelDto": {
