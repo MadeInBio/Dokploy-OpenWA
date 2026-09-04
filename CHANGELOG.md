@@ -51,9 +51,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `channel`, `status`, `broadcast`, `unknown`), so a subscription can exclude channel (newsletter)
   traffic that the `isGroup` boolean could not separate from a 1:1 chat
   ([#1500](https://github.com/rmyndharis/OpenWA/issues/1500)).
+- `GET /sessions/{sessionId}/chats` reports each chat's `archived`, `pinned` and `muted` state.
+  The matching actions (`POST /sessions/{sessionId}/chats/archive`, `/pin`, `/mute`) already
+  existed; the chat list never reported the resulting state back, so a consumer had no way to
+  filter archived chats out of its own view, order pinned chats first, or honour a mute — and
+  whatsapp-web.js's `chat_archived` event is deliberately not wired, so there was no event
+  fallback either. `GET /sessions/{sessionId}/labels/{labelId}/chats` returns the same chat
+  summary, so it reports the three fields as well.
 
 ### Changed
 
+- `ChatSummary` grew three required fields (`archived`, `pinned`, `muted`), so the chat-list shape
+  is wider than it was. Every producer sets them and the SDK type files carry them, but code
+  holding a hand-built `ChatSummary` — a test fixture, a mock, a stub gateway — has to supply the
+  three. Required rather than optional so "not muted" never has to be read out of an absent field.
 - A whatsapp-web.js protocol timeout is no longer eligible to be classified as a dead page.
   Behaviour is unchanged on the current Puppeteer; the guard keeps a future bump from reporting a
   slow command as a transport death.
