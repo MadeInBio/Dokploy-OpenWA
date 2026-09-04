@@ -1,14 +1,15 @@
 # OpenWA - Docker Compose per Dokploy
 # =============================================================================
-# Stack: openwa-api (NestJS) + dashboard (nginx, reverse-proxy interno) + PostgreSQL
+# Stack: openwa-api (NestJS, serve anche la dashboard SPA) + PostgreSQL
 #
 # Dokploy fornisce GIA' il proprio Traefik con SSL Let's Encrypt automatico, quindi:
 #   - NON includiamo un Traefik qui dentro
 #   - NON pubblichiamo porte sull'host (niente "ports:")
-#   - Il dominio pubblico va assegnato al servizio "dashboard" dalla UI "Domains"
-#     di Dokploy (Service Name: dashboard, Port: 80). La dashboard (nginx) fa da
-#     reverse-proxy interno verso openwa-api per le rotte /api/ e /socket.io/
-#     (WebSocket), quindi un solo dominio basta per tutto.
+#   - Il dominio pubblico va assegnato al servizio "openwa-api" dalla UI "Domains"
+#     di Dokploy (Service Name: openwa-api, Port: 2785). Dalla v0.2 upstream
+#     (commit 83a90ff5) l'API NestJS serve anche la dashboard SPA compilata,
+#     oltre a /api/ e /socket.io/: un solo container e un solo dominio.
+#     Il vecchio container nginx "dashboard" non esiste piu'.
 #
 # Variabili richieste (impostale nella sezione "Environment" del progetto Dokploy):
 #   DOMAIN              ->  es. wa.miodominio.com  (senza https://)
@@ -61,8 +62,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # dokploy-network serve al Traefik di Dokploy per raggiungere l'API.
+    # NON aggiungere qui label di routing: il dominio si gestisce dalla UI.
     networks:
       - openwa-internal
+      - dokploy-network
     healthcheck:
       test:
         [
@@ -75,22 +79,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  # ===== Dashboard (SPA nginx + reverse-proxy interno verso l'API) =====
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile.traefik
-    restart: unless-stopped
-    depends_on:
-      - openwa-api
-    # Il dominio si assegna dalla UI "Domains" di Dokploy puntando a QUESTO
-    # servizio (dashboard) sulla porta 80. Il servizio resta su dokploy-network
-    # cosi' il Traefik di Dokploy puo' raggiungerlo e applicare le proprie label.
-    # NON aggiungere qui label di routing: andrebbero in conflitto con la UI.
-    networks:
-      - openwa-internal
-      - dokploy-network
 
   # ===== PostgreSQL =====
   postgres:
