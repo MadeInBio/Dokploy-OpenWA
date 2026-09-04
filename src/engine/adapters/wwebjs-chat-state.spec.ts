@@ -65,6 +65,22 @@ describe('WwebjsChats.getChats chat state', () => {
     const summary = await listWith({ isMuted: false, muteExpiration: 1_700_000_000 });
     expect(summary.muted).toBe(false);
   });
+
+  // The all-true and all-false cases above stay green if a mapper reads archived off pinned, or
+  // muted off the wrong flag. These mixed cases pin each field to its own source: the first breaks
+  // an archived/pinned swap, the second breaks muted reading either boolean.
+  it('maps archived, pinned and muted each from its own field', async () => {
+    expect(await listWith({ archived: true, pinned: false, isMuted: false })).toMatchObject({
+      archived: true,
+      pinned: false,
+      muted: false,
+    });
+    expect(await listWith({ archived: false, pinned: false, isMuted: true })).toMatchObject({
+      archived: false,
+      pinned: false,
+      muted: true,
+    });
+  });
 });
 
 describe('WwebjsLabels.getChatsByLabel chat state', () => {
@@ -82,5 +98,18 @@ describe('WwebjsLabels.getChatsByLabel chat state', () => {
   it('reports false when the label entry left them unset', async () => {
     const summary = await listWith({});
     expect(summary).toMatchObject({ archived: false, pinned: false, muted: false });
+  });
+
+  it('maps archived, pinned and muted each from its own field', async () => {
+    expect(await listWith({ archived: true, pinned: false, isMuted: false })).toMatchObject({
+      archived: true,
+      pinned: false,
+      muted: false,
+    });
+    expect(await listWith({ archived: false, pinned: false, isMuted: true })).toMatchObject({
+      archived: false,
+      pinned: false,
+      muted: true,
+    });
   });
 });

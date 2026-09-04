@@ -42,11 +42,29 @@ describe('BaileysSessionStore', () => {
     expect(store.findContact('628222@s.whatsapp.net')?.pushName).toBe('Bob');
   });
 
-  describe('pinned and muted state', () => {
+  describe('archived, pinned and muted state', () => {
+    // A fresh store per call: upsertChats MERGES, so reusing one store lets an absent-field case
+    // re-read a value a prior call set, and the default-to-false path would never run.
     const chatFor = (over: Record<string, unknown>) => {
-      store.upsertChats([{ id: '628111@s.whatsapp.net', name: 'Alice', ...over }]);
-      return store.listChats()[0];
+      const s = new BaileysSessionStore();
+      s.upsertChats([{ id: '628111@s.whatsapp.net', name: 'Alice', ...over }]);
+      return s.listChats()[0];
     };
+
+    it('maps archived, pinned and muted each from its own field', () => {
+      // No Baileys case asserted archived: true before, so `archived: c.archived ?? false` could be
+      // a constant false and stay green. Mixed values pin each flag to its own source.
+      expect(chatFor({ archived: true, pinned: 0, muteEndTime: 0 })).toMatchObject({
+        archived: true,
+        pinned: false,
+        muted: false,
+      });
+      expect(chatFor({ archived: false, pinned: 2, muteEndTime: 0 })).toMatchObject({
+        archived: false,
+        pinned: true,
+        muted: false,
+      });
+    });
 
     it('reads a pin as a flag, though Baileys reports it as an order', () => {
       // proto.IConversation.pinned is a NUMBER — its position among pinned chats, not a boolean.
