@@ -13870,6 +13870,12 @@
               "type": "object"
             }
           },
+          "chatStates": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
           "pluginInstances": {
             "type": "array",
             "items": {
@@ -13927,6 +13933,7 @@
           "templates",
           "baileysStoredMessages",
           "lidMappings",
+          "chatStates",
           "pluginInstances",
           "conversationMappings",
           "ingressEvents",
@@ -13967,6 +13974,10 @@
           "lidMappings": {
             "type": "number",
             "example": 64
+          },
+          "chatStates": {
+            "type": "number",
+            "example": 40
           },
           "pluginInstances": {
             "type": "number",
@@ -14009,6 +14020,7 @@
           "templates",
           "baileysStoredMessages",
           "lidMappings",
+          "chatStates",
           "pluginInstances",
           "conversationMappings",
           "ingressEvents",
@@ -14114,6 +14126,9 @@
                 "type": "array"
               },
               "lidMappings": {
+                "type": "array"
+              },
+              "chatStates": {
                 "type": "array"
               },
               "pluginInstances": {
