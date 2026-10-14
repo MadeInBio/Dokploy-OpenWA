@@ -9,15 +9,15 @@ Configurazione di riferimento:
 - **Esposizione**: dominio dedicato con HTTPS automatico (Let's Encrypt via Traefik di Dokploy)
 
 > Architettura: Dokploy ha già il suo **Traefik** con SSL. Esponiamo al pubblico solo
-> la **dashboard** (nginx), che fa da reverse-proxy interno verso l'API per le rotte
-> `/api/` e `/socket.io/`. Un solo dominio serve sia la UI sia l'API.
+> il container **`openwa-api`** (porta 2785): l'API NestJS serve anche la dashboard SPA
+> compilata, oltre a `/api/` e `/socket.io/`. Un solo container e un solo dominio.
 
 ---
 
 ## 1. Prerequisiti
 
 1. **Dokploy** installato e funzionante sul server Oracle.
-2. Il repository **`MadeInBio/OpenWA`** su GitHub deve contenere il file
+2. Il repository **`MadeInBio/Dokploy-OpenWA`** su GitHub deve contenere il file
    `docker-compose.dokploy.yml` (vedi passo 2).
 3. Un **(sotto)dominio** con record DNS **A** che punta all'**IP pubblico** del server, es:
    ```
@@ -69,7 +69,7 @@ Conserva entrambi: `API_MASTER_KEY` è la chiave admin dell'API.
 
 1. **Dashboard Dokploy → Projects → Create Project** (es. nome `openwa`).
 2. Dentro al progetto: **Create Service → Compose**.
-3. **Provider**: *Git* → collega GitHub e seleziona il repo **`MadeInBio/OpenWA`**.
+3. **Provider**: *Git* → collega GitHub e seleziona il repo **`MadeInBio/Dokploy-OpenWA`**.
    - **Branch**: `main`
    - **Compose Path**: `./docker-compose.dokploy.yml`
 4. **Compose Type**: `Docker Compose`.
@@ -89,12 +89,22 @@ DATABASE_PASSWORD=<la-password-generata-al-passo-3>
 Queste variabili vengono interpolate dentro `docker-compose.dokploy.yml`
 (`${DOMAIN}`, `${API_MASTER_KEY}`, `${DATABASE_PASSWORD}`).
 
+Consigliata anche:
+
+```env
+TRUSTED_PROXIES=<subnet di dokploy-network>
+```
+
+La subnet la leggi con `docker network inspect dokploy-network` (campo `Subnet`). Senza,
+OpenWA non si fida dell'header `X-Forwarded-For` di Traefik: tutte le richieste senza API key
+condividono un solo budget di traffico, e gli `allowedIps` delle API key vedono l'IP di Traefik
+invece di quello del client.
+
 ---
 
 ## 6. Dominio / HTTPS (UI Domains di Dokploy)
 
-Quando **tutti** i servizi del Compose sono attivi (in particolare il container
-`dashboard`), assegna il dominio dalla UI di Dokploy puntando al servizio **dashboard**:
+Assegna il dominio dalla UI di Dokploy puntando al servizio **openwa-api**:
 
 1. Servizio Compose → tab **Domains → Create Domain**.
 2. Imposta:
@@ -102,8 +112,8 @@ Quando **tutti** i servizi del Compose sono attivi (in particolare il container
 | Campo                      | Valore                 |
 | -------------------------- | ---------------------- |
 | **Host**                   | `www.owa.19062022.xyz` |
-| **Service** (se richiesto) | `dashboard`            |
-| **Container Port**         | `80`                   |
+| **Service** (se richiesto) | `openwa-api`           |
+| **Container Port**         | `2785`                 |
 | **Path**                   | `/`                    |
 | **HTTPS**                  | ON                     |
 | **Certificate Provider**   | `Let's Encrypt`        |
@@ -111,12 +121,12 @@ Quando **tutti** i servizi del Compose sono attivi (in particolare il container
 3. Salva e fai **Redeploy**.
 
 Dokploy genera da solo le label Traefik (routing + redirect HTTP→HTTPS) e richiede il
-certificato. Il servizio `dashboard` nel compose resta su `dokploy-network` proprio per
-essere raggiunto dal Traefik di Dokploy.
+certificato. `openwa-api` resta su `dokploy-network` proprio per essere raggiunto dal
+Traefik di Dokploy. Traefik ignora i container `unhealthy`: finché l'healthcheck non passa,
+il dominio risponde 404.
 
-> ⚠️ Punta a **`dashboard` : 80**, non a `openwa-api` : 2785. La dashboard (nginx) inoltra
-> internamente `/api/` e `/socket.io/` all'API, quindi UI + API + WebSocket finiscono sullo
-> stesso dominio in HTTPS. Se punti all'API ottieni 404 su `/` (porta 2785) o 502 (porta 80).
+> Il vecchio container `dashboard` (nginx, porta 80) non esiste più: un dominio che punta
+> ancora lì fa fallire il deploy. Correggilo prima di premere Redeploy.
 >
 > La variabile `DOMAIN` nelle Environment resta necessaria: l'API la usa per
 > `BASE_URL`/`DASHBOARD_URL`/`CORS_ORIGINS`. Tienila allineata all'Host.
@@ -129,11 +139,12 @@ essere raggiunto dal Traefik di Dokploy.
 2. Il primo deploy **builda da sorgente** (API + dashboard): su ARM Ampere richiede
    qualche minuto perché compila i moduli nativi e prepara Chromium.
 3. Segui i **Logs** in Dokploy. Sei a posto quando vedi l'avvio di Nest e l'healthcheck
-   dell'API diventa *healthy* (`/api/health`).
+   dell'API diventa *healthy* (`/api/health/ready`, che verifica anche `main.sqlite` e
+   Postgres).
 
 Verifica:
 ```bash
-curl https://wa.miodominio.com/api/health
+curl https://wa.miodominio.com/api/health/ready
 ```
 
 ---
@@ -170,8 +181,9 @@ Due volumi Docker tengono lo stato:
 
 - Ogni sessione WhatsApp avvia un'istanza **Chromium** headless: stima **~300-500 MB RAM**
   per sessione. Con la A1 Flex (≥6 GB) gestisci tranquillamente più sessioni.
-- Il `Dockerfile` installa Chromium dai pacchetti Debian **arm64** e imposta
-  `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`: nessuna configurazione extra per ARM.
+- Il `Dockerfile` installa Chromium dai pacchetti Debian **arm64** e lo collega a
+  `PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/puppeteer-chrome`: nessuna configurazione extra
+  per ARM. La versione di Chromium è quella che Debian ha al momento della build.
 - `shm_size: 1gb` e `--disable-dev-shm-usage` nel compose prevengono i crash di Chromium
   dovuti a `/dev/shm` troppo piccolo.
 
@@ -179,9 +191,34 @@ Due volumi Docker tengono lo stato:
 
 ## 11. Aggiornamenti
 
-Per aggiornare OpenWA: fai `git push` delle modifiche sul branch collegato e premi
-**Redeploy** in Dokploy (o abilita l'**auto-deploy** via webhook GitHub).
-I volumi persistono tra un deploy e l'altro, quindi sessioni e dati restano intatti.
+Questo repo è un fork di `rmyndharis/OpenWA` con due soli file in più
+(`docker-compose.dokploy.yml` e questa guida), quindi le novità upstream entrano senza conflitti:
+
+```bash
+git remote add upstream https://github.com/rmyndharis/OpenWA.git   # solo la prima volta
+git fetch upstream
+git merge upstream/main
+git push origin main
+```
+
+(o *Sync fork* dalla pagina del repo su GitHub). Poi **Redeploy** in Dokploy, che ricostruisce
+l'immagine dal sorgente. I volumi persistono tra un deploy e l'altro.
+
+**Prima di ogni aggiornamento fai un backup.** Dalla 0.24 un rollback non è più indolore: l'avvio
+rifiuta un `main.sqlite` migrato da una versione più nuova, e un Chromium di major più vecchia
+cancella i login WhatsApp salvati da quella più nuova. Senza backup, tornare indietro significa
+riscansionare i QR e ricreare le API key.
+
+```bash
+P=<nome interno Dokploy>        # docker volume ls | grep openwa-data → il prefisso prima di _openwa-data
+docker stop ${P}-openwa-api-1   # fermo, così il profilo Chromium è coerente (attende fino a 75 s)
+docker run --rm -v ${P}_openwa-data:/d -v $PWD:/b alpine tar czf /b/openwa-data-$(date +%F).tgz -C /d .
+docker exec ${P}-postgres-1 pg_dump -U openwa openwa | gzip > openwa-pg-$(date +%F).sql.gz
+```
+
+Dopo il Redeploy il primo avvio può metterci più del solito: le migrazioni costruiscono indici
+sulle tabelle dei messaggi, e finché non finiscono l'healthcheck resta rosso. Le note di
+aggiornamento di ogni versione sono nel `CHANGELOG.md`, sezioni *Upgrade notes*.
 
 ---
 

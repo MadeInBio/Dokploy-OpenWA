@@ -24,6 +24,10 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Dalla 0.24 lo spegnimento ordinato (drain, engine, webhook, flush) puo' durare fino a ~67s:
+    # con il default di Docker (10s) Chromium verrebbe ucciso a meta' e il profilo di sessione
+    # potrebbe restare corrotto. Valore preso dal docker-compose.yml upstream.
+    stop_grace_period: 75s
     # Chromium/Puppeteer e' piu' stabile con /dev/shm ampio
     shm_size: '1gb'
     expose:
@@ -32,6 +36,8 @@ services:
       - NODE_ENV=production
       - PORT=2785
       - LOG_LEVEL=info
+      # NON impostare TZ: dalla 0.23.7 la connessione Postgres forza UTC e i timestamp scritti
+      # dall'app vanno letti come UTC. Il container gira gia' in UTC (default dell'immagine).
       - BASE_URL=https://${DOMAIN}
       - DASHBOARD_URL=https://${DOMAIN}
       - CORS_ORIGINS=https://${DOMAIN}
@@ -57,6 +63,10 @@ services:
       - PLUGINS_DIR=/app/data/plugins
       # --- Sicurezza ---
       - API_MASTER_KEY=${API_MASTER_KEY}
+      # Subnet di dokploy-network, da cui arriva il Traefik di Dokploy (docker network inspect
+      # dokploy-network). Senza, l'app non si fida di X-Forwarded-For: le richieste senza API key
+      # condividono un solo budget e gli allowedIps delle chiavi vedono l'IP di Traefik.
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
     volumes:
       - openwa-data:/app/data
     depends_on:
@@ -67,14 +77,11 @@ services:
     networks:
       - openwa-internal
       - dokploy-network
+    # Stesso probe del Dockerfile e del compose upstream: /api/health/ready controlla anche che
+    # main.sqlite e Postgres rispondano e va a 503 durante lo spegnimento, cosi' Traefik smette
+    # di instradare prima che il container si fermi. /api/health risponde 200 anche col DB giu'.
     healthcheck:
-      test:
-        [
-          'CMD',
-          'node',
-          '-e',
-          "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
-        ]
+      test: ['CMD', 'curl', '-f', 'http://localhost:2785/api/health/ready']
       interval: 30s
       timeout: 10s
       retries: 3
