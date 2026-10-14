@@ -1,11 +1,18 @@
 // The backend caps a bulk batch at 100 messages (ArrayMaxSize on SendBulkMessageDto).
 export const BULK_MAX_RECIPIENTS = 100;
 
+// Pre-read cap for the recipients file picker. A phone list is bytes, not media: 2 MiB is roughly
+// 100k entries, far past the batch cap, while still stopping a mistaken multi-hundred-MB pick from
+// being materialized as a JS string before the textarea ever sees it (same shape as the media
+// upload's pre-read check in MessageTester).
+export const BULK_RECIPIENTS_FILE_MAX_BYTES = 2 * 1024 * 1024;
+
 /**
  * Parse the bulk-recipients textarea into chat IDs: trims whitespace, drops blanks, de-dupes, and
- * normalizes bare phone numbers to `<digits>@c.us`. An entry containing '@' is treated as a full
- * chat ID and passes through untouched; anything else must carry at least MIN_PHONE_DIGITS digits
- * or it is dropped rather than sent as a meaningless or truncated id.
+ * normalizes bare phone numbers to `<digits>@c.us`. An entry with a WhatsApp chat id shape passes
+ * through untouched; any other entry containing '@', such as an email column, is dropped. Anything
+ * else must carry at least MIN_PHONE_DIGITS digits or it is dropped rather than sent as a
+ * meaningless or truncated id.
  *
  * Entries are separated by line endings AND by the comma/semicolon/tab a spreadsheet export writes,
  * because the file picker offers `.csv`. Phone-number formatting (spaces, parentheses, hyphens,
@@ -31,6 +38,13 @@ const FIELD_SEPARATORS = /[,;\t]/;
  */
 const MIN_PHONE_DIGITS = 6;
 
+/**
+ * A full chat id: a numeric user part (a device suffix or group hyphen allowed) on a WhatsApp
+ * server. The server list is what keeps an email out; a numeric local part alone would still let
+ * `12345@qq.com` through.
+ */
+const CHAT_ID = /^[0-9][0-9:-]*@(c\.us|g\.us|s\.whatsapp\.net|lid|newsletter|broadcast)$/i;
+
 export function parseBulkRecipients(text: string): string[] {
   const seen = new Set<string>();
   for (const rawLine of text.split(/\r\n?|\n/)) {
@@ -42,7 +56,7 @@ export function parseBulkRecipients(text: string): string[] {
       const field = rawField.trim();
       if (!field) continue;
       if (field.includes('@')) {
-        seen.add(field);
+        if (CHAT_ID.test(field)) seen.add(field);
         continue;
       }
       const digits = field.replace(/[^0-9]/g, '');

@@ -3,14 +3,15 @@ import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { inboundMediaConcurrency } from './inbound-media-cap';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
+import type { Contact, EventResponseEvent } from '../interfaces/whatsapp-engine.interface';
 
 /**
  * `downloadMediaMessage` is a jest mock, not a silent no-op: the real-download branch
- * (`baileys-events.ts:588-638`, reached whenever `isMediaType` is true and skipMediaDownload
+ * (`resolveInboundMedia` in baileys-events.ts, reached whenever `isMediaType` is true and skipMediaDownload
  * isn't set) calls `b.downloadMediaMessage(...)`, and this stub implements nothing else that
  * branch needs — so if a non-media contentType were ever misclassified as media (the exact
  * slip the Plan 2 mapper extraction could introduce), the call throws and that throw is caught
- * by baileys-events.ts:632-637, leaving `media` unset. An `incoming.media` assertion alone
+ * by its try/catch around `downloadInboundMediaCapped`, leaving `media` unset. An `incoming.media` assertion alone
  * can't tell "correctly not classified as media" from "misclassified, then crashed and got
  * swallowed" — asserting `downloadMediaMessage` was never called can.
  */
@@ -18,9 +19,9 @@ const downloadMediaMessage = jest.fn();
 
 /**
  * A fresh async-iterable stream of the given chunks — the shape `downloadMediaMessage(msg, 'stream', ...)`
- * resolves to (see `downloadInboundMediaCapped`, baileys-events.ts:491-525). Mirrors the identically-named
+ * resolves to (see `downloadInboundMediaCapped` in baileys-events.ts). Mirrors the identically-named
  * helper in `baileys.adapter.spec.ts`. Without this, the bare `jest.fn()` above resolves to `undefined`,
- * `for await` over it throws, and the real-download branch's own try/catch (baileys-events.ts:632-637)
+ * `for await` over it throws, and the real-download branch's own try/catch (in `resolveInboundMedia`)
  * swallows that throw before `media` is ever assigned — so that branch can never be exercised at all.
  */
 function streamOf(...chunks: Buffer[]): AsyncIterable<Buffer> & { destroy: () => void } {
@@ -77,8 +78,16 @@ const normalizeMessageContent = (content: Record<string, unknown> | null | undef
   return current;
 };
 
+// Baileys' own picks for the node downloadMediaMessage fetches: unwrap, then the first content key.
+const extractMessageContent = (content: Record<string, unknown> | null | undefined): unknown =>
+  normalizeMessageContent(content);
+const getContentType = (content: Record<string, unknown> | undefined): string | undefined =>
+  Object.keys(content ?? {}).find(k => k === 'conversation' || k.endsWith('Message'));
+
 const libStub = {
   normalizeMessageContent,
+  extractMessageContent,
+  getContentType,
   downloadMediaMessage,
 } as unknown as Awaited<ReturnType<BaileysEventsHost['loadLib']>>;
 
@@ -92,16 +101,17 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getSocketOrNull: () => null,
     logger: createLogger('BaileysEventsSpec'),
     loadLib: () => Promise.resolve(libStub),
+    getFetchDispatcher: () => undefined,
     toNeutralJid: (jid: string) => jid,
     normalizedSelfJid: () => '6280000000000@s.whatsapp.net',
-    // connectedAt only gates handleMessagesUpsert's history-replay skip; mapMessage itself never
-    // reads it.
-    connectedAt: 0,
     inboundLimiter: new ConcurrencyLimiter(inboundMediaConcurrency()),
     recordKeyLidMappings: noop,
     recordMessage: noop,
     recordMessageEdit: noop,
+    consumeOwnSend: () => false,
+    getStoredMessage: () => undefined,
     putStoredMessage: () => undefined,
+    updateStoredMessage: () => undefined,
     getOnMessage: () => undefined,
     getOnMessageCreate: () => undefined,
     getOnMessageRevoked: () => undefined,
@@ -109,6 +119,8 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getOnMessageReaction: () => undefined,
     getOnMessageAck: () => undefined,
     getOnGroupEvent: () => undefined,
+    getOnEventResponse: () => undefined,
+    findContact: () => null,
     getOnCall: () => undefined,
     getOnPresenceUpdate: () => undefined,
     getOnCallOutcome: () => undefined,
@@ -473,7 +485,7 @@ describe('BaileysEvents.mapMessage', () => {
       },
       'imageMessage',
       // No skipMediaDownload here — this routes through the pre-download-gate + streaming-download
-      // branch (baileys-events.ts:588-638), not the omitted-marker branch every other media case in
+      // branch (`resolveInboundMedia`), not the omitted-marker branch every other media case in
       // this file exercises via `{ skipMediaDownload: true }`.
     );
 
@@ -485,5 +497,301 @@ describe('BaileysEvents.mapMessage', () => {
       data: buf.toString('base64'),
     });
     expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BaileysEvents inbound media source', () => {
+  const download = (message: Record<string, unknown>) =>
+    new BaileysEvents(makeHost()).mapMessage(
+      {
+        key: { id: 'wamid.src', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+        messageTimestamp: 1_700_000_000,
+        message,
+      },
+      'imageMessage',
+    );
+
+  beforeEach(() => downloadMediaMessage.mockReset());
+
+  it.each([
+    ['a plain-http url', { url: 'http://127.0.0.1/latest/meta-data/' }],
+    ['a url outside whatsapp.net', { url: 'https://internal.example/x' }],
+    ['a whatsapp.net url on another port', { url: 'https://mmg.whatsapp.net:8080/x' }],
+    ['a directPath that rewrites the host', { url: 'https://mmg.whatsapp.net/x', directPath: '@internal.example/x' }],
+    ['a directPath under a foreign url host', { url: 'https://internal.example/x', directPath: '/v/t62/x' }],
+  ])('does not fetch media whose address is %s', async (_name, source) => {
+    const incoming = await download({ imageMessage: { mimetype: 'image/jpeg', fileLength: 7, ...source } });
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+    expect(incoming.media).toEqual({ mimetype: 'image/jpeg', filename: undefined, omitted: true, sizeBytes: 7 });
+  });
+
+  it('checks the node Baileys downloads, not the first media type this file looks for', async () => {
+    await download({
+      documentMessage: { mimetype: 'application/pdf', fileLength: 7, url: 'http://127.0.0.1/' },
+      imageMessage: { mimetype: 'image/jpeg', fileLength: 7, url: 'https://mmg.whatsapp.net/x' },
+    });
+    expect(downloadMediaMessage).not.toHaveBeenCalled();
+  });
+
+  it('still downloads media served from WhatsApp hosts', async () => {
+    const buf = Buffer.from('IMGDATA');
+    downloadMediaMessage.mockResolvedValueOnce(streamOf(buf));
+    const incoming = await download({
+      imageMessage: {
+        mimetype: 'image/jpeg',
+        fileLength: buf.byteLength,
+        url: 'https://mmg.whatsapp.net/v/t62/x.enc',
+        directPath: '/v/t62/x.enc',
+      },
+    });
+    expect(downloadMediaMessage).toHaveBeenCalledTimes(1);
+    expect(incoming.media).toEqual({ mimetype: 'image/jpeg', filename: undefined, data: buf.toString('base64') });
+  });
+
+  it('refuses a re-upload answer that points outside WhatsApp hosts', async () => {
+    downloadMediaMessage.mockImplementationOnce(
+      async (
+        _m: WAMessage,
+        _t: string,
+        _o: unknown,
+        ctx: { reuploadRequest: (m: WAMessage) => Promise<WAMessage> },
+      ) => {
+        await ctx.reuploadRequest(_m);
+        return streamOf(Buffer.from('x'));
+      },
+    );
+    const updateMediaMessage = jest.fn((m: WAMessage) =>
+      Promise.resolve({
+        ...m,
+        message: { imageMessage: { url: 'https://mmg.whatsapp.net', directPath: '@internal.example/x' } },
+      }),
+    );
+    const incoming = await new BaileysEvents(
+      makeHost({ getSocket: () => ({ updateMediaMessage }) as unknown as WASocket }),
+    ).mapMessage(
+      {
+        key: { id: 'wamid.re', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+        messageTimestamp: 1_700_000_000,
+        message: { imageMessage: { mimetype: 'image/jpeg', fileLength: 1, url: 'https://mmg.whatsapp.net/x' } },
+      },
+      'imageMessage',
+    );
+    expect(updateMediaMessage).toHaveBeenCalledTimes(1);
+    expect(incoming.media).toEqual({ mimetype: 'image/jpeg', filename: undefined, omitted: true, sizeBytes: 1 });
+  });
+});
+
+describe('BaileysEvents store writes across an unlink', () => {
+  // Holds every message's processing at its first await until released, the way a media download
+  // that outlives the socket would.
+  const held = () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const putStoredMessage = jest.fn(() => Promise.resolve());
+    const events = new BaileysEvents(
+      makeHost({ loadLib: () => gate.then(() => libStub), putStoredMessage, getOnMessage: () => jest.fn() }),
+    );
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'wamid.unlink', remoteJid: '15550001111@s.whatsapp.net', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hi' },
+        },
+      ],
+    });
+    const settle = async () => {
+      release();
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+    };
+    return { events, putStoredMessage, settle };
+  };
+
+  it('stores a message whose processing finishes with the account still linked', async () => {
+    const { putStoredMessage, settle } = held();
+    await settle();
+    expect(putStoredMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not store a message still being processed when the account was unlinked', async () => {
+    const { events, putStoredMessage, settle } = held();
+    events.fenceStoredWrites();
+    await settle();
+    expect(putStoredMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('BaileysEvents record of messages deleted for everyone', () => {
+  it('forgets the oldest id once it holds its limit', () => {
+    const events = new BaileysEvents(makeHost());
+    const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
+    for (let i = 0; i <= limit; i++) events.markDeletedForEveryone(`M${i}`);
+
+    expect(events.wasDeletedForEveryone('M0')).toBe(false);
+    expect(events.wasDeletedForEveryone('M1')).toBe(true);
+    expect(events.wasDeletedForEveryone(`M${limit}`)).toBe(true);
+  });
+});
+
+describe('BaileysEvents event RSVPs (event.response)', () => {
+  const group = '120363000000000001@g.us';
+  const eventKey = { id: 'EVT1', remoteJid: group };
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  function rsvp(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      eventResponseMessageKey: {
+        id: 'RSVP1',
+        remoteJid: group,
+        participant: '6281111111111@s.whatsapp.net',
+        fromMe: false,
+      },
+      senderTimestampMs: 1786000000123,
+      response: { response: 1, timestampMs: 1786000000123, extraGuestCount: 2 },
+      ...overrides,
+    };
+  }
+
+  it('reports a decrypted RSVP with the event name read from the stored creation message', async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getOnEventResponse: () => onEventResponse,
+        getStoredMessage: () =>
+          Promise.resolve({ key: eventKey, message: { eventMessage: { name: 'Game night' } } } as unknown as WAMessage),
+      }),
+    );
+
+    events.handleMessagesUpdate([{ key: eventKey, update: { eventResponses: [rsvp()] } }] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledTimes(1);
+    expect(onEventResponse).toHaveBeenCalledWith({
+      eventMessageId: 'EVT1',
+      chatId: group,
+      responderId: '6281111111111@s.whatsapp.net',
+      fromMe: false,
+      response: 'going',
+      extraGuestCount: 2,
+      eventName: 'Game night',
+      responseMessageId: 'RSVP1',
+      timestamp: 1786000000,
+    });
+  });
+
+  it.each([
+    [2, 'not_going'],
+    [3, 'maybe'],
+    [0, 'unknown'],
+    [undefined, 'unknown'],
+  ])('maps response type %p to %p', async (type, expected) => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse }));
+
+    events.handleMessagesUpdate([
+      { key: eventKey, update: { eventResponses: [rsvp({ response: { response: type } })] } },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ response: expected }));
+    expect((onEventResponse.mock.calls as unknown[][])[0][0]).not.toHaveProperty('extraGuestCount');
+  });
+
+  it("attributes the account's own 1:1 answer to the account", async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse }));
+    const chat = '6282222222222@s.whatsapp.net';
+
+    events.handleMessagesUpdate([
+      {
+        key: { id: 'EVT2', remoteJid: chat },
+        update: { eventResponses: [rsvp({ eventResponseMessageKey: { id: 'RSVP2', remoteJid: chat, fromMe: true } })] },
+      },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: chat, responderId: '6280000000000@s.whatsapp.net', fromMe: true }),
+    );
+  });
+
+  it("takes a guest's 1:1 answer to the account's own event from the RSVP, not the guest's view of the event", async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse }));
+    const guest = '6282222222222@s.whatsapp.net';
+
+    // Baileys passes the creation key on as the guest sent it: its remoteJid is this account.
+    events.handleMessagesUpdate([
+      {
+        key: { id: 'EVT3', remoteJid: '6280000000000@s.whatsapp.net', fromMe: false },
+        update: {
+          eventResponses: [rsvp({ eventResponseMessageKey: { id: 'RSVP3', remoteJid: guest, fromMe: false } })],
+        },
+      },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ eventMessageId: 'EVT3', chatId: guest, responderId: guest, fromMe: false }),
+    );
+  });
+
+  it("names the responder from the session's contact store", async () => {
+    const onEventResponse = jest.fn();
+    const findContact = jest.fn((id: string) =>
+      id === '6281111111111@s.whatsapp.net' ? ({ id, name: 'Ana Pérez', pushName: 'Ana' } as Contact) : null,
+    );
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse, findContact }));
+
+    events.handleMessagesUpdate([
+      { key: eventKey, update: { eventResponses: [rsvp()] } },
+      {
+        key: eventKey,
+        update: {
+          eventResponses: [
+            rsvp({ eventResponseMessageKey: { id: 'RSVP4', remoteJid: group, participant: '628999@s.whatsapp.net' } }),
+          ],
+        },
+      },
+    ] as never);
+    await flush();
+
+    const byId = (id: string) =>
+      (onEventResponse.mock.calls as EventResponseEvent[][]).map(([e]) => e).find(e => e.responseMessageId === id);
+    expect(byId('RSVP1')?.contact).toEqual({ name: 'Ana Pérez', pushName: 'Ana' });
+    expect(byId('RSVP4')).not.toHaveProperty('contact');
+  });
+
+  it('still reports the RSVP, without a name, when the store cannot be read', async () => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        getOnEventResponse: () => onEventResponse,
+        getStoredMessage: () => Promise.reject(new Error('database is locked')),
+      }),
+    );
+
+    events.handleMessagesUpdate([{ key: eventKey, update: { eventResponses: [rsvp()] } }] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledTimes(1);
+    expect((onEventResponse.mock.calls as unknown[][])[0][0]).not.toHaveProperty('eventName');
+  });
+
+  it('keeps reporting acks next to RSVPs, and ignores an RSVP without its own key', async () => {
+    const onEventResponse = jest.fn();
+    const onMessageAck = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({ getOnEventResponse: () => onEventResponse, getOnMessageAck: () => onMessageAck }),
+    );
+
+    events.handleMessagesUpdate([
+      { key: eventKey, update: { status: 3, eventResponses: [rsvp({ eventResponseMessageKey: null })] } },
+    ] as never);
+    await flush();
+
+    expect(onMessageAck).toHaveBeenCalledTimes(1);
+    expect(onEventResponse).not.toHaveBeenCalled();
   });
 });

@@ -46,14 +46,41 @@ BulkMessageType = Literal["text", "image", "video", "audio", "document"]
 BatchMessageStatus = Literal["pending", "sent", "failed", "cancelled"]
 BatchLifecycleStatus = Literal["pending", "processing", "completed", "failed", "cancelled"]
 ChatKind = Literal["individual", "group", "channel", "status", "broadcast", "unknown"]
+MessageType = Literal[
+    "text",
+    "image",
+    "video",
+    "audio",
+    "voice",
+    "document",
+    "sticker",
+    "location",
+    "contact",
+    "poll",
+    "call",
+    "revoked",
+    "order",
+    "product",
+    "masked",
+    "unknown",
+]
 WebhookEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.failed", "message.revoked",
     "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
     "session.disconnected", "session.reconnect_loop", "session.restriction", "presence.update",
-    "group.join", "group.leave", "group.update", "group.join_request",
+    "event.response", "group.join", "group.leave", "group.update", "group.join_request",
     "call.received", "status.received",
     "call.accepted", "call.rejected", "call.missed",
     "*",
+]
+# The events a delivery can carry: WebhookEvent without the "*" subscription wildcard.
+WebhookDeliveryEvent = Literal[
+    "message.received", "message.sent", "message.ack", "message.failed", "message.revoked",
+    "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
+    "session.disconnected", "session.reconnect_loop", "session.restriction", "presence.update",
+    "event.response", "group.join", "group.leave", "group.update", "group.join_request",
+    "call.received", "status.received",
+    "call.accepted", "call.rejected", "call.missed",
 ]
 
 
@@ -73,7 +100,7 @@ CallLinkType = Literal["audio", "video"]
 class CreateCallLinkRequest(TypedDict):
     """Body for :meth:`CallsResource.create_link`.
 
-    ``start_time`` is absolute epoch MILLISECONDS; a link for right now is the current timestamp
+    ``startTime`` is absolute epoch MILLISECONDS; a link for right now is the current timestamp
     rather than an omitted field.
     """
 
@@ -150,7 +177,7 @@ class ChatPresence(TypedDict, total=False):
 class UpsertLabelRequest(TypedDict, total=False):
     """A label create-or-update body. The id travels in the path -- WhatsApp keys the write on it."""
 
-    # Leave out to keep the current name.
+    # Not preserved when left out: the write replaces the whole label.
     name: str
     # WhatsApp's colour INDEX (0-19), NOT a hex value -- it does not round-trip with the hexColor
     # labels are read back with, because neither engine exposes the mapping.
@@ -228,10 +255,14 @@ class SessionResponse(TypedDict):
     # A limit WhatsApp itself has placed on the account, or None when there is none. Distinct from
     # lastError, which describes a fault on the gateway's side.
     restriction: NotRequired[AccountRestriction | None]
-    # Whether the gateway holds a live engine for this session -- the precondition stop/logout/
-    # force-kill require and start refuses. Not derivable from status: 'disconnected' covers both a
-    # session mid automatic-reconnect (engine present) and one stopped with no engine. Absent from a
-    # gateway that predates the field (the TypedDict is total=False).
+    # Whether the gateway holds a live engine for this session: an engine in the answering process
+    # or, in a multi-node deployment, a live claim by the node running it. On the node running the
+    # session, True means stop/logout/force-kill can act and start is refused. For a session another
+    # node runs, those routes act only when request routing (NODE_URL on every node) forwards them;
+    # without it, other nodes answer 409 to start and stop and 400 to logout and force-kill. Not
+    # derivable from status: 'disconnected' covers both a session mid automatic-reconnect (engine
+    # present) and one stopped with no engine. Always sent by current gateways; a gateway that
+    # predates the field omits it, so read it with .get("engineLoaded") against one.
     engineLoaded: bool
 
 
@@ -262,7 +293,7 @@ class SessionConfig(TypedDict):
 
 
 class UpdateSessionConfigRequest(TypedDict, total=False):
-    """Partial update of a running session's config -- no re-link, no QR scan.
+    """Partial update of a session's config, in any state -- no re-link, no QR scan.
 
     Send ``None`` for ``maxReconnectAttempts`` to restore unlimited retries, which no in-range number
     can express.
@@ -277,6 +308,7 @@ class CreateSessionRequest(TypedDict):
     name: str
     config: NotRequired[dict[str, Any]]
     proxyUrl: NotRequired[str]
+    # Deprecated and ignored by the server: the proxyUrl scheme selects the proxy protocol.
     proxyType: NotRequired[Literal['http', 'https', 'socks4', 'socks5']]
 
 
@@ -428,7 +460,6 @@ class EditMessageRequest(TypedDict):
 
 class SendTemplateRequest(TypedDict):
     # chatId required; provide exactly one of templateId / templateName.
-    # Modeled total=False (callers pass plain dicts); the backend validates.
     chatId: Jid
     templateId: NotRequired[str]
     templateName: NotRequired[str]
@@ -455,7 +486,9 @@ class SendPollRequest(TypedDict):
 ListMessagesQuery = TypedDict(
     "ListMessagesQuery",
     # ``after`` is a keyset cursor: the id of the last message of the previous page.
-    {"chatId": Jid, "from": Jid, "limit": int, "offset": int, "after": str, "inlineMedia": bool},
+    {"chatId": Jid, "from": Jid, "limit": int, "offset": int, "after": str, "inlineMedia": bool,
+     "since": float, "until": float, "direction": Literal["incoming", "outgoing"],
+     "orderBy": Literal["createdAt", "timestamp"], "type": str, "messageId": str},
     total=False,
 )
 
@@ -523,9 +556,27 @@ class MessageCall(TypedDict, total=False):
     missed: bool
 
 
+class MessageOrder(TypedDict):
+    """Order block on a live history message, present on ``order`` messages only: the cart the
+    customer placed from the business catalog, plus the single-order token for its items."""
+
+    orderId: str
+    token: NotRequired[str]
+
+
+class MessageProduct(TypedDict):
+    """Product block on a live history message, present on ``product`` messages only: the catalog
+    product shared into the chat."""
+
+    productId: str
+    title: NotRequired[str]
+    description: NotRequired[str]
+    businessOwnerJid: NotRequired[str]
+
+
 class MessageContact(TypedDict, total=False):
-    """Sender contact block. History carries ``pushName`` only; the richer fields arrive on
-    ``message.received`` when ``WEBHOOK_CONTACT_DETAILS`` is enabled."""
+    """Sender contact block. History carries ``name`` and ``pushName``; the richer fields are
+    added when ``WEBHOOK_CONTACT_DETAILS`` is enabled, as on ``message.received``."""
 
     id: Jid
     number: str
@@ -543,6 +594,12 @@ class MessageContact(TypedDict, total=False):
     labels: list
 
 
+class ChatHistoryPoll(TypedDict):
+    name: str
+    options: list[str]
+    allowMultipleAnswers: bool
+
+
 # A message read live from WhatsApp by ``messages.history()`` — the engine
 # payload, richer and differently shaped than the persisted MessageRecord.
 ChatHistoryMessage = TypedDict(
@@ -553,32 +610,35 @@ ChatHistoryMessage = TypedDict(
         "to": Jid,
         "chatId": Jid,
         "body": str,
-        "type": str,
+        "type": MessageType,
         "timestamp": int,
         "fromMe": bool,
         "isGroup": bool,
-        "isStatusBroadcast": bool,
-        "kind": str,
-        "ephemeralDuration": int,
-        "author": Jid,
-        "mentionedIds": list,
-        "call": MessageCall,
-        "isLidSender": bool,
-        "senderPhone": Optional[str],
-        "contact": MessageContact,
-        "backgroundColor": str,
-        "font": int,
-        "media": ChatHistoryMedia,
-        "quotedMessage": QuotedMessage,
-        "location": MessageLocation,
+        "kind": ChatKind,
+        "isStatusBroadcast": NotRequired[bool],
+        "ephemeralDuration": NotRequired[int],
+        "author": NotRequired[Jid],
+        "mentionedIds": NotRequired[list],
+        "call": NotRequired[MessageCall],
+        "isLidSender": NotRequired[bool],
+        "senderPhone": NotRequired[Optional[str]],
+        "contact": NotRequired[MessageContact],
+        "backgroundColor": NotRequired[str],
+        "font": NotRequired[int],
+        "media": NotRequired[ChatHistoryMedia],
+        "quotedMessage": NotRequired[QuotedMessage],
+        "poll": NotRequired[ChatHistoryPoll],
+        "location": NotRequired[MessageLocation],
+        "order": NotRequired[MessageOrder],
+        "product": NotRequired[MessageProduct],
     },
-    total=False,
 )
 
 
 class MessageListResponse(TypedDict):
     """Paginated payload returned by ``GET /sessions/:id/messages``."""
 
+    unknownTimestampTotal: NotRequired[int]
     messages: list[MessageRecord]
     total: int
 
@@ -664,9 +724,9 @@ class BatchProgress(TypedDict):
 
 
 class BatchStatusResponse(TypedDict):
-    """Response from ``GET /messages/batch/:batchId`` and the cancel endpoint.
+    """Response from ``GET /messages/batch/:batchId``.
 
-    Distinct from :class:`BulkMessageResponse` (the send-bulk acknowledgement).
+    Distinct from :class:`BulkMessageResponse` (the send-bulk acknowledgement) and :class:`BatchCancelResponse`.
     """
 
     batchId: str
@@ -675,6 +735,14 @@ class BatchStatusResponse(TypedDict):
     results: list[BatchMessageResult]
     startedAt: NotRequired[str | None]
     completedAt: NotRequired[str | None]
+
+
+class BatchCancelResponse(TypedDict):
+    """Response from ``POST /messages/batch/:batchId/cancel``: the batch state without per-recipient ``results``."""
+
+    batchId: str
+    status: BatchLifecycleStatus
+    progress: BatchProgress
 
 
 # ── Contact ───────────────────────────────────────────────────────
@@ -729,11 +797,13 @@ class GroupParticipant(TypedDict):
 
 
 class GroupSummary(TypedDict):
-    """Item returned by ``GET /sessions/:id/groups`` (the slim list shape)."""
+    """Item returned by ``GET /sessions/:id/groups`` (the slim list shape), and the ``groups.create`` response."""
 
     id: Jid
     name: str
+    # Only in a groups.create response, never in groups.list; groups.get carries the participants.
     participantsCount: NotRequired[int]
+    # Only in a groups.create response, never in groups.list; groups.get carries each participant's role.
     isAdmin: NotRequired[bool]
     linkedParentJID: NotRequired[str | None]
 
@@ -870,7 +940,8 @@ class UpdateWebhookRequest(TypedDict, total=False):
     secret: str
     headers: dict[str, str]
     filters: WebhookFilters | None
-    # Server DTO field is ``retryCount`` (0-5; default 3).
+    # Total delivery attempts per event including the first, 0 to 5 (0 and 1 both mean one attempt);
+    # omit to keep the current value. Server DTO field is ``retryCount``.
     retryCount: int
     active: bool
 
@@ -896,6 +967,78 @@ class WebhookTestResult(TypedDict, total=False):
     error: str
 
 
+class WebhookDelivery(TypedDict):
+    """The JSON body of a webhook delivery (docs/06 section 6.6).
+
+    ``event`` is ``"test"`` for a delivery sent by the test endpoint. Check the raw body with
+    :func:`openwa.verify_webhook_signature` before parsing it.
+    """
+
+    event: WebhookDeliveryEvent | Literal["test"]
+    timestamp: str
+    sessionId: str
+    idempotencyKey: str
+    deliveryId: str
+    data: dict[str, Any]
+
+
+class WebhookDeliveryFailure(TypedDict):
+    """A webhook delivery the gateway gave up on or could not dispatch, as listed by the delivery-failure log."""
+
+    id: str
+    webhookId: str
+    sessionId: str
+    event: str
+    url: str
+    # The idempotency key the receiver would have deduped on.
+    idempotencyKey: NotRequired[str | None]
+    deliveryId: NotRequired[str | None]
+    # Attempts made before giving up; 0 when the delivery was not given up after retries (oversize or
+    # unserializable payload, capacity shed, or shutdown, possibly in a retry backoff after earlier
+    # attempts were sent).
+    attempts: int
+    # Last HTTP status when the failure was a non-2xx response; None for a network or timeout error,
+    # or when attempts is 0.
+    lastStatusCode: NotRequired[int | None]
+    lastError: str
+    # ISO timestamp of when the failure was first recorded.
+    createdAt: str
+    # True when the row still holds the event data and can be replayed with
+    # WebhooksResource.redrive_delivery_failures: a terminal row (attempts > 0) recorded while the
+    # gateway's WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS is above 0, until that window passes.
+    replayable: bool
+
+
+class RedriveWebhookDeliveriesRequest(TypedDict, total=False):
+    """Body of ``WebhooksResource.redrive_delivery_failures``. An empty body takes the least-retried eligible rows."""
+
+    # Only rows of this session (within the key's allowedSessions).
+    sessionId: str
+    # Only rows of this webhook.
+    webhookId: str
+    # Only these failure rows (ids from delivery_failures), at most 500.
+    ids: list[str]
+    # Max rows replayed by this call (1-500, default 100).
+    limit: int
+
+
+class WebhookRedriveResult(TypedDict):
+    """Outcome of ``WebhooksResource.redrive_delivery_failures``."""
+
+    # Rows replayed by this call: delivered plus enqueued.
+    redriven: int
+    # Delivered by a direct POST; their failure rows were removed.
+    delivered: int
+    # Reserved for compatibility; operator redrive always returns zero.
+    enqueued: int
+    # Replays that failed again; their rows stay, with attempts raised by one.
+    failed: int
+    # Rows not replayed: the webhook was removed, disabled or unsubscribed, or a plugin cancelled it.
+    skipped: int
+    # Replayable rows still in scope after this call.
+    remaining: int
+
+
 # ── Chat ──────────────────────────────────────────────────────────
 
 
@@ -906,12 +1049,15 @@ class ChatSummary(TypedDict):
     unreadCount: int
     # Server returns a plain preview string, not a message object.
     lastMessage: NotRequired[str]
-    timestamp: str | int
+    lastMessageType: NotRequired[MessageType]
+    timestamp: int
     kind: ChatKind
     archived: bool
     pinned: bool
     # Whether the chat is muted right now, not the expiry behind it.
     muted: bool
+    # Epoch milliseconds the mute ends, present only when muted; 0 means indefinitely.
+    muteExpiration: NotRequired[int]
 
 
 class MarkChatRequest(TypedDict):
@@ -928,8 +1074,9 @@ class MarkChatReadRequest(TypedDict):
     # Body for mark_read.
     chatId: Jid
     # Messages to acknowledge (at most 100; an empty list is refused). Baileys acknowledges
-    # individual messages, so without this only the newest message the engine still holds in
-    # memory gets a receipt. Ignored by whatsapp-web.js, whose own sendSeen is chat-level.
+    # individual messages, so without this only the newest received message the engine still
+    # holds in memory gets a receipt. Ignored by whatsapp-web.js, whose own sendSeen is
+    # chat-level.
     messageIds: NotRequired[list[str]]
 
 
@@ -1045,6 +1192,15 @@ class VotePollRequest(TypedDict):
     options: list[str]
 
 
+class ClickButtonRequest(TypedDict):
+    """Click a choice on a WhatsApp Business prompt. Baileys only."""
+
+    chatId: str
+    messageId: str
+    buttonId: str
+    text: NotRequired[str]
+
+
 class StarMessageRequest(TypedDict):
     """Star or unstar a message. Best-effort on whatsapp-web.js."""
 
@@ -1124,9 +1280,13 @@ class HealthResponse(TypedDict, total=False):
     version: str
 
 
-class HealthReadyResponse(TypedDict, total=False):
+class HealthDependencyStatus(TypedDict):
     status: str
-    details: dict[str, str]
+
+
+class HealthReadyResponse(TypedDict):
+    status: str
+    details: dict[str, HealthDependencyStatus]
 
 
 # ── Auth ──────────────────────────────────────────────────────────
@@ -1135,6 +1295,8 @@ class HealthReadyResponse(TypedDict, total=False):
 class AuthValidateResponse(TypedDict, total=False):
     valid: bool
     role: str
+    engineType: str
+    scoped: bool
 
 
 # ── Template ──────────────────────────────────────────────────────
@@ -1152,8 +1314,7 @@ class TemplateRecord(TypedDict, total=False):
 
 
 class CreateTemplateRequest(TypedDict):
-    # name + body required; header/footer optional. Modeled total=False
-    # (callers pass plain dicts); the backend validates the required fields.
+    # name + body required; header/footer optional.
     name: str
     body: str
     header: NotRequired[str]
@@ -1186,7 +1347,8 @@ class AddLabelRequest(TypedDict):
 
 
 # Mirrors the backend ``Channel`` — returned by the engine as-is, with no DTO in between.
-# ``picture``/``createdAt`` are populated by Baileys; whatsapp-web.js omits both.
+# ``createdAt`` is populated by Baileys; whatsapp-web.js omits it. ``picture`` is not currently
+# filled by either engine.
 class ChannelRecord(TypedDict, total=False):
     id: Jid
     name: str
@@ -1273,8 +1435,7 @@ class ProductMessageResponse(TypedDict):
     timestamp: int
 
 
-# chatId + productId required; body optional. Modeled total=False for 3.9 compat
-# (callers pass plain dicts); the backend validates the required fields.
+# chatId + productId required; body optional.
 class SendProductRequest(TypedDict):
     chatId: Jid
     productId: str

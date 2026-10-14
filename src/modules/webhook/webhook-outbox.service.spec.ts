@@ -1,3 +1,4 @@
+import { In } from 'typeorm';
 import { WebhookOutboxService } from './webhook-outbox.service';
 import { WebhookOutboxEvent } from './entities/webhook-outbox-event.entity';
 
@@ -45,7 +46,8 @@ describe('WebhookOutboxService', () => {
 
     repo.update.mockRejectedValue(new Error('disk full'));
     await expect(service.close('wh-1', 'key_wh-1', 'dispatched')).resolves.toBeUndefined();
-    await expect(service.countAttempt('row-1', 0)).resolves.toBeUndefined();
+    // A failed count must not block the replay: the write is best-effort like the rest.
+    await expect(service.countAttempt('row-1', 0)).resolves.toBe(true);
   });
 
   it('retires the payload when recording an outcome, so a settled row stops carrying a message body', async () => {
@@ -55,6 +57,15 @@ describe('WebhookOutboxService', () => {
       { webhookId: 'wh-1', idempotencyKey: 'key_wh-1' },
       expect.objectContaining({ state: 'dispatched', payload: null }),
     );
+  });
+
+  it('keeps payload when marking queued and excludes already settled rows', async () => {
+    await service.markQueued('wh-1', 'key_wh-1', 'job-1');
+    expect(repo.update).toHaveBeenCalledWith(
+      expect.objectContaining({ state: In(['pending', 'queued']) }),
+      expect.objectContaining({ state: 'queued', deliveryId: 'job-1' }),
+    );
+    expect((repo.update.mock.calls as unknown[][])[0][1]).not.toHaveProperty('payload');
   });
 
   it('returns only rows that still carry a payload: a retired row is not replayable', async () => {
@@ -75,9 +86,20 @@ describe('WebhookOutboxService', () => {
   });
 
   it('counts an attempt by incrementing the stored number, not by recomputing it', async () => {
-    await service.countAttempt('row-1', 2);
+    repo.update.mockResolvedValue({ affected: 1 });
 
-    expect(repo.update).toHaveBeenCalledWith({ id: 'row-1' }, expect.objectContaining({ attempts: 3 }));
+    await expect(service.countAttempt('row-1', 2)).resolves.toBe(true);
+
+    expect(repo.update).toHaveBeenCalledWith(
+      { id: 'row-1', state: In(['pending', 'queued']) },
+      expect.objectContaining({ attempts: 3 }),
+    );
+  });
+
+  it('reports a row that is no longer pending, so a stale copy is not replayed', async () => {
+    repo.update.mockResolvedValue({ affected: 0 });
+
+    await expect(service.countAttempt('row-1', 2)).resolves.toBe(false);
   });
 });
 
@@ -99,7 +121,7 @@ describe('WebhookOutboxService retention', () => {
     ];
     // Deleting a 'pending' row on age would discard the delivery this table exists to protect.
     expect(where.state.type).toBe('not');
-    expect(where.state.value).toBe('pending');
+    expect(where.state.value).toEqual(['pending', 'queued']);
     expect(where.createdAt.type).toBe('lessThan');
   });
 

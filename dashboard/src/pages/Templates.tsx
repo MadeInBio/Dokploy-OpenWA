@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, FileText, Loader2, Plus, Search, Trash2 } from 'lucide-react';
+import { AlertCircle, Copy, FileText, Loader2, Plus, Search, Trash2 } from 'lucide-react';
 import { type MessageTemplate, type TemplatePayload } from '../services/api';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useRole } from '../hooks/useRole';
@@ -56,19 +56,30 @@ export function Templates() {
   const { t } = useTranslation();
   useDocumentTitle(t('templates.title'));
   const { canWrite } = useRole();
-  const { data: sessions = [], isLoading: loadingSessions } = useSessionsQuery();
+  const { data: sessions = [], isLoading: loadingSessions, error: sessionsError } = useSessionsQuery();
+  // A failed read is not "no sessions": the gateway may simply be restarting. A failed background refetch keeps
+  // the cached list, so only a read that never produced one counts.
+  const sessionsFailed = !!sessionsError && sessions.length === 0;
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [form, setForm] = useState<TemplateForm>(emptyForm);
+  // The draft on screen now, read by a save that resolves after the operator may have moved on.
+  const formRef = useRef(form);
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
+  // Bumped whenever the editor starts another draft (new, opened or session switched), unlike edits to the same one.
+  const draftRef = useRef(0);
   const [editingTemplate, setEditingTemplate] = useState<MessageTemplate | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MessageTemplate | null>(null);
   const toast = useToast();
   const [previewValues, setPreviewValues] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
 
-  const { data: templates = [], isLoading: loadingTemplates } = useTemplatesQuery(
-    selectedSessionId,
-    !!selectedSessionId,
-  );
+  const {
+    data: templates = [],
+    isLoading: loadingTemplates,
+    error: templatesError,
+  } = useTemplatesQuery(selectedSessionId, !!selectedSessionId);
   const createMutation = useCreateTemplateMutation();
   const updateMutation = useUpdateTemplateMutation();
   const deleteMutation = useDeleteTemplateMutation();
@@ -86,11 +97,22 @@ export function Templates() {
     );
   }, [searchTerm, templates]);
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  // The row whose update is in flight: the list shows its pre-save values until the update settles, and
+  // reopening it then would load them into the editor to be saved back. Every other row is current.
+  const updatingId = updateMutation.isPending ? updateMutation.variables?.id : undefined;
 
+  // Select the first session, and again once the selected one is gone (deleted elsewhere): a stale id
+  // matches no option, so the select would show another session while every read and write still
+  // went to the deleted one.
   useEffect(() => {
-    if (!selectedSessionId && sessions.length > 0) {
-      setSelectedSessionId(sessions[0].id);
-    }
+    if (sessions.some(session => session.id === selectedSessionId)) return;
+    const next = sessions[0]?.id ?? '';
+    if (next === selectedSessionId) return;
+    setSelectedSessionId(next);
+    draftRef.current += 1;
+    setForm(emptyForm);
+    setEditingTemplate(null);
+    setPreviewValues({});
   }, [selectedSessionId, sessions]);
 
   useEffect(() => {
@@ -104,12 +126,14 @@ export function Templates() {
   }, [placeholders]);
 
   const resetForm = () => {
+    draftRef.current += 1;
     setForm(emptyForm);
     setEditingTemplate(null);
     setPreviewValues({});
   };
 
   const openEdit = (template: MessageTemplate) => {
+    draftRef.current += 1;
     setEditingTemplate(template);
     setForm({
       name: template.name,
@@ -122,23 +146,32 @@ export function Templates() {
 
   const handleSave = async () => {
     if (!selectedSessionId || !form.name.trim() || !form.body.trim()) return;
+    const savedForm = form;
+    const draft = draftRef.current;
 
     try {
+      let saved: MessageTemplate;
       if (editingTemplate) {
-        await updateMutation.mutateAsync({
+        saved = await updateMutation.mutateAsync({
           sessionId: selectedSessionId,
           id: editingTemplate.id,
           data: toPayload(form),
         });
         toast.success(t('templates.toasts.updated'));
       } else {
-        await createMutation.mutateAsync({
+        saved = await createMutation.mutateAsync({
           sessionId: selectedSessionId,
           data: toPayload(form),
         });
         toast.success(t('templates.toasts.created'));
       }
-      resetForm();
+      // Edits typed into this draft while the save was in flight stay on screen; point them at the saved
+      // row so the next save updates it (a second create would fail the unique name check) and the
+      // editor header reflects the stored name.
+      if (draftRef.current === draft && formRef.current !== savedForm) setEditingTemplate(saved);
+      // Every edit, template switch and session switch replaces the form object, so a save that
+      // resolves after any of them must leave the newer draft alone.
+      if (formRef.current === savedForm) resetForm();
     } catch (err) {
       toast.error(
         t(editingTemplate ? 'templates.toasts.updateFailed' : 'templates.toasts.createFailed', {
@@ -193,7 +226,9 @@ export function Templates() {
               resetForm();
             }}
           >
-            {sessions.length === 0 && <option value="">{t('templates.noSessions')}</option>}
+            {sessions.length === 0 && (
+              <option value="">{t(sessionsFailed ? 'dashboard.loadError' : 'templates.noSessions')}</option>
+            )}
             {sessions.map(session => (
               <option key={session.id} value={session.id}>
                 {session.name}
@@ -203,7 +238,13 @@ export function Templates() {
         }
       />
 
-      {sessions.length === 0 ? (
+      {sessionsFailed ? (
+        <div className="templates-empty-page" role="alert">
+          <AlertCircle size={48} strokeWidth={1} />
+          <h3>{t('dashboard.loadError')}</h3>
+          <p>{sessionsError.message}</p>
+        </div>
+      ) : sessions.length === 0 ? (
         <div className="templates-empty-page">
           <FileText size={48} strokeWidth={1} />
           <h3>{t('templates.empty.noSessionsTitle')}</h3>
@@ -232,9 +273,27 @@ export function Templates() {
               />
             </div>
 
-            {loadingTemplates ? (
+            {/* No session selected yet means the first-session effect has not run: the read is still to start. */}
+            {loadingTemplates || !selectedSessionId ? (
               <div className="templates-loading-inline">
                 <Loader2 className="animate-spin" size={24} />
+              </div>
+            ) : templatesError && templates.length === 0 ? (
+              // A failed read is not an empty library: a viewer key always gets 403 here (the route is
+              // OPERATOR-only), and a gateway error would otherwise read as "no templates saved".
+              <div className="templates-empty-list" role="alert">
+                <AlertCircle size={40} strokeWidth={1} />
+                {(templatesError as { status?: number }).status === 403 ? (
+                  <>
+                    <h3>{t('templates.empty.forbiddenTitle')}</h3>
+                    <p>{t('templates.empty.forbiddenDesc')}</p>
+                  </>
+                ) : (
+                  <>
+                    <h3>{t('templates.empty.loadErrorTitle')}</h3>
+                    <p>{templatesError.message}</p>
+                  </>
+                )}
               </div>
             ) : templates.length === 0 ? (
               <div className="templates-empty-list">
@@ -245,7 +304,7 @@ export function Templates() {
             ) : filteredTemplates.length === 0 ? (
               <div className="templates-empty-list compact">
                 <Search size={32} strokeWidth={1.5} />
-                <h3>{t('templates.empty.title')}</h3>
+                <h3>{t('templates.empty.noMatch', 'No templates match your search.')}</h3>
               </div>
             ) : (
               <div className="template-list" role="list">
@@ -253,20 +312,37 @@ export function Templates() {
                   const templatePlaceholders = extractPlaceholders(template);
                   const isSelected = editingTemplate?.id === template.id;
                   return (
-                    <button
+                    <div
                       key={template.id}
-                      className={`template-list-item ${isSelected ? 'selected' : ''}`}
-                      onClick={() => openEdit(template)}
-                      type="button"
+                      className={`template-list-row ${canWrite ? 'deletable' : ''}`}
+                      role="listitem"
                     >
-                      <span className="template-list-title">{template.name}</span>
-                      <span className="template-list-body">{template.body}</span>
-                      <span className="template-list-meta">
-                        {templatePlaceholders.length > 0
-                          ? templatePlaceholders.map(key => `{{${key}}}`).join(' ')
-                          : t('templates.noPlaceholders')}
-                      </span>
-                    </button>
+                      <button
+                        className={`template-list-item ${isSelected ? 'selected' : ''}`}
+                        onClick={() => openEdit(template)}
+                        disabled={template.id === updatingId}
+                        type="button"
+                      >
+                        <span className="template-list-title">{template.name}</span>
+                        <span className="template-list-body">{template.body}</span>
+                        <span className="template-list-meta">
+                          {templatePlaceholders.length > 0
+                            ? templatePlaceholders.map(key => `{{${key}}}`).join(' ')
+                            : t('templates.noPlaceholders')}
+                        </span>
+                      </button>
+                      {canWrite && (
+                        <button
+                          className="icon-btn danger template-list-delete"
+                          title={t('common.delete')}
+                          aria-label={t('common.delete')}
+                          onClick={() => setDeleteTarget(template)}
+                          type="button"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>

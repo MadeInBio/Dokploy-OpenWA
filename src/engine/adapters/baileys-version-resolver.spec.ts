@@ -38,6 +38,66 @@ describe('BaileysVersionResolver', () => {
 
   const asBaileysLib = (mock: unknown): typeof BaileysLib => mock as typeof BaileysLib;
 
+  describe('Session proxy', () => {
+    // Every supported proxy scheme now has a fetch transport, so the lookup rides the proxy instead
+    // of being skipped for want of one.
+    it('hands the dispatcher to the remote tier rather than skipping it', async () => {
+      const dispatcher = { marker: 'session-proxy' };
+      const resolver = createResolver();
+      const mockLib = {
+        fetchLatestWaWebVersion: jest.fn().mockResolvedValue({ isLatest: true, version: [2, 3000, 1043857760] }),
+        fetchLatestBaileysVersion: jest.fn(),
+      };
+
+      const version = await resolver.resolve(asBaileysLib(mockLib), { dispatcher });
+
+      expect(version).toEqual([2, 3000, 1043857760]);
+      expect(mockLib.fetchLatestWaWebVersion).toHaveBeenCalledWith(expect.objectContaining({ dispatcher }));
+    });
+
+    // A torn-down session discards the result, so its lookup must not go on making proxied requests
+    // or warn about falling back.
+    it('cancels the in-flight lookup and tries nothing further once the session is torn down', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'last_known_wa_version.json'), JSON.stringify([2, 3000, 1]));
+      const teardown = new AbortController();
+      let requestSignal: AbortSignal | undefined;
+      const mockLib = {
+        fetchLatestWaWebVersion: jest.fn((options: { signal: AbortSignal }) => {
+          requestSignal = options.signal;
+          teardown.abort();
+          return Promise.resolve({ isLatest: false, version: [2, 3000, 0], error: new Error('aborted') });
+        }),
+        fetchLatestBaileysVersion: jest.fn(),
+      };
+
+      await createResolver().resolve(asBaileysLib(mockLib), { dispatcher: {}, signal: teardown.signal });
+
+      expect(requestSignal?.aborted).toBe(true);
+      expect(mockLib.fetchLatestBaileysVersion).not.toHaveBeenCalled();
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    it('skips the cache and fallback warnings when the session is torn down during the second lookup', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'last_known_wa_version.json'), JSON.stringify([2, 3000, 1]));
+      const teardown = new AbortController();
+      const mockLib = {
+        fetchLatestWaWebVersion: jest.fn().mockRejectedValue(new Error('unreachable')),
+        fetchLatestBaileysVersion: jest.fn(() => {
+          teardown.abort();
+          return Promise.resolve({ isLatest: false, version: [2, 3000, 0], error: new Error('client closed') });
+        }),
+      };
+
+      await createResolver().resolve(asBaileysLib(mockLib), { dispatcher: {}, signal: teardown.signal });
+
+      expect(mockLib.fetchLatestBaileysVersion).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith('fetchLatestWaWebVersion failed: unreachable', {
+        sessionId: 'test-session',
+      });
+    });
+  });
+
   describe('Tier 1: BAILEYS_WA_VERSION environment variable override', () => {
     it('when BAILEYS_WA_VERSION is set in dot format, returns the overridden version immediately without network calls', async () => {
       // Arrange
